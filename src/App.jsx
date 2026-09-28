@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 
-// Verbindung zum Backend auf Render
+// Verbindung zum Backend
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
-// Sprachen mit realistischen Markt-Faktoren (Deutsch = 100%)
 const LANGUAGES = [
   { name: 'Deutsch 🇩🇪', factor: 1.0 },
   { name: 'Englisch 🇬🇧', factor: 1.1 },
@@ -15,7 +14,6 @@ const LANGUAGES = [
   { name: 'Italienisch 🇮🇹', factor: 0.9 }
 ];
 
-// Zustände mit Preis-Multiplikatoren
 const CONDITIONS = [
   { name: 'Mint', factor: 1.25, label: 'Mint (Makellos, +25%)' },
   { name: 'Near Mint', factor: 1.0, label: 'Near Mint (Standard)' },
@@ -27,19 +25,15 @@ const CONDITIONS = [
 ];
 
 export default function App() {
-  // --- AUTHENTIFIZIERUNG ---
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('poketracker_auth') === 'true';
-  });
+  const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('poketracker_auth') === 'true');
   const [authMode, setAuthMode] = useState('login'); 
   
-  // --- APP STATE ---
   const [activeTab, setActiveTab] = useState('profile');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
 
-  // --- DATEN (Collection & Watchlist) ---
   const [collection, setCollection] = useState(() => {
     const saved = localStorage.getItem('poketracker_collection');
     return saved ? JSON.parse(saved) : [];
@@ -49,14 +43,12 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
-  // --- MODAL & EINGABEN ---
   const [selectedCard, setSelectedCard] = useState(null);
   const [modalType, setModalType] = useState(null); 
   const [cardCondition, setCardCondition] = useState('Near Mint');
   const [cardLanguage, setCardLanguage] = useState('Deutsch 🇩🇪');
   const [customPrice, setCustomPrice] = useState('');
 
-  // --- FILTER & SORTIERUNG ---
   const [filterLang, setFilterLang] = useState('Alle');
   const [filterSet, setFilterSet] = useState('Alle');
   const [sortBy, setSortBy] = useState('name-asc');
@@ -80,8 +72,10 @@ export default function App() {
     localStorage.removeItem('poketracker_auth');
   };
 
-  // --- LOGIK: PREIS & TREND BERECHNEN ---
+  // --- SICHERE PREIS-LOGIK ---
   const calculatePrice = (card, conditionName, langName) => {
+    if (!card) return "0.00";
+    // Sicheres Auslesen, falls cardmarket oder prices fehlen
     const basePrice = card.cardmarket?.prices?.trendPrice || 0;
     const condFactor = CONDITIONS.find(c => c.name === conditionName)?.factor || 1.0;
     const langFactor = LANGUAGES.find(l => l.name === langName)?.factor || 1.0;
@@ -89,25 +83,33 @@ export default function App() {
   };
 
   const getTrendIcon = (card) => {
+    if (!card) return null;
     const current = card.cardmarket?.prices?.trendPrice || 0;
     const avg30 = card.cardmarket?.prices?.avg30 || current;
-    // Wenn die Abweichung geringer als 5 Cent ist, gilt es als stabil (=)
     if (current > avg30 + 0.05) return <span className="text-emerald-400 font-bold" title="Preis steigt">▲</span>;
     if (current < avg30 - 0.05) return <span className="text-rose-400 font-bold" title="Preis sinkt">▼</span>;
     return <span className="text-slate-400 font-bold" title="Preis stabil">=</span>;
   };
 
-  // --- AKTIONEN ---
   const handleSearch = async (e) => {
     if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
     setLoading(true);
+    setSearchError('');
     try {
       const res = await fetch(`${API_URL}/api/cards?name=${encodeURIComponent(searchQuery)}`);
+      if (!res.ok) throw new Error("API antwortet nicht");
       const data = await res.json();
-      setSearchResults(data);
+      
+      // Sicherheits-Check, falls die API Müll zurückgibt
+      if (!Array.isArray(data)) {
+         setSearchResults([]);
+         setSearchError("Keine Karten gefunden oder Fehler bei der Abfrage.");
+      } else {
+         setSearchResults(data);
+      }
     } catch (err) {
-      console.error(err);
+      setSearchError('Verbindungsfehler zum Backend. Läuft Render noch?');
     } finally {
       setLoading(false);
     }
@@ -133,41 +135,35 @@ export default function App() {
     setModalType(null);
   };
 
-  // --- STATISTIKEN FÜR DAS PROFIL ---
   const stats = (() => {
     if (collection.length === 0) return { min: '0.00', median: '0.00', max: '0.00' };
-    
-    let totalMedian = 0; // Der normale Wert
-    let totalMin = 0;    // Der Wert, wenn die Preise fallen (~15% weniger)
-    let totalMax = 0;    // Der Wert, wenn die Preise steigen (~25% mehr)
-
+    let totalMedian = 0, totalMin = 0, totalMax = 0;
     collection.forEach(item => {
       const price = parseFloat(item.userPrice) || 0;
       totalMedian += price;
       totalMin += price * 0.85;
       totalMax += price * 1.25;
     });
-
-    return {
-      min: totalMin.toFixed(2),
-      median: totalMedian.toFixed(2),
-      max: totalMax.toFixed(2)
-    };
+    return { min: totalMin.toFixed(2), median: totalMedian.toFixed(2), max: totalMax.toFixed(2) };
   })();
 
-  // --- FILTER & SORTIERUNG ---
   const filteredCollection = (() => {
     let list = [...collection];
     if (filterLang !== 'Alle') list = list.filter(i => i.userLanguage === filterLang);
     if (filterSet !== 'Alle') list = list.filter(i => i.set?.name === filterSet);
     
     list.sort((a, b) => {
-      if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
-      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
-      if (sortBy === 'price-desc') return parseFloat(b.userPrice) - parseFloat(a.userPrice);
-      if (sortBy === 'price-asc') return parseFloat(a.userPrice) - parseFloat(b.userPrice);
-      if (sortBy === 'set-asc') return (a.set?.name || '').localeCompare(b.set?.name || '');
-      if (sortBy === 'lang-asc') return (a.userLanguage || '').localeCompare(b.userLanguage || '');
+      // Sicheres Sortieren (Absturzschutz)
+      const nameA = a.name || ''; const nameB = b.name || '';
+      const setA = a.set?.name || ''; const setB = b.set?.name || '';
+      const langA = a.userLanguage || ''; const langB = b.userLanguage || '';
+      
+      if (sortBy === 'name-asc') return nameA.localeCompare(nameB);
+      if (sortBy === 'name-desc') return nameB.localeCompare(nameA);
+      if (sortBy === 'price-desc') return (parseFloat(b.userPrice) || 0) - (parseFloat(a.userPrice) || 0);
+      if (sortBy === 'price-asc') return (parseFloat(a.userPrice) || 0) - (parseFloat(b.userPrice) || 0);
+      if (sortBy === 'set-asc') return setA.localeCompare(setB);
+      if (sortBy === 'lang-asc') return langA.localeCompare(langB);
       return 0;
     });
     return list;
@@ -175,20 +171,14 @@ export default function App() {
 
   const availableSets = ['Alle', ...new Set(collection.map(item => item.set?.name).filter(Boolean))];
 
-  // ==========================================
-  // VIEW 1: LOGIN (Design nach deinen Vorgaben)
-  // ==========================================
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans selection:bg-cyan-500 text-slate-100">
         <div className="bg-slate-900 border border-cyan-500/30 p-8 rounded-2xl w-full max-w-md shadow-2xl shadow-cyan-900/20">
           <div className="text-center mb-8">
-            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-teal-400 tracking-wider mb-2">
-              PokéTracker
-            </h1>
+            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-teal-400 tracking-wider mb-2">PokéTracker</h1>
             <p className="text-slate-400 text-sm">Verwalte deine Sammlung & Werte</p>
           </div>
-          
           <form onSubmit={handleLogin} className="space-y-4">
             {authMode === 'register' && (
               <div>
@@ -208,7 +198,6 @@ export default function App() {
               {authMode === 'login' ? 'Anmelden' : 'Account erstellen'}
             </button>
           </form>
-
           <div className="mt-6 text-center text-sm text-slate-400">
             {authMode === 'login' ? (
               <p>Sign up: Noch keinen Account? <button onClick={() => setAuthMode('register')} className="text-cyan-400 font-bold hover:underline">Hier registrieren</button></p>
@@ -221,20 +210,14 @@ export default function App() {
     );
   }
 
-  // ==========================================
-  // VIEW 2: MAIN APP
-  // ==========================================
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-24 font-sans selection:bg-cyan-500 selection:text-black">
-      {/* HEADER */}
       <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between shadow-md">
         <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ PokéTracker</span>
         <button onClick={handleLogout} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 transition-colors">Abmelden</button>
       </header>
 
       <main className="max-w-4xl mx-auto p-4">
-        
-        {/* --- PROFIL TAB --- */}
         {activeTab === 'profile' && (
           <div className="space-y-6 fade-in">
             <div className="bg-slate-900 border border-cyan-500/30 p-6 rounded-2xl shadow-xl shadow-cyan-900/10">
@@ -261,7 +244,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- COLLECTION TAB --- */}
         {activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
             <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md">
@@ -281,7 +263,6 @@ export default function App() {
                 <option value="lang-asc">Ursprungsland</option>
               </select>
             </div>
-
             {filteredCollection.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Keine Karten gefunden.</div>
             ) : (
@@ -289,9 +270,9 @@ export default function App() {
                 {filteredCollection.map((item) => (
                   <div key={item.instanceId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 relative group shadow-lg">
                     <button onClick={() => setCollection(collection.filter(i => i.instanceId !== item.instanceId))} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
-                    <img onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.images.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                    <img onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.images?.small || ''} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{item.name}</h3>
-                    <p className="text-xs text-slate-400 truncate">{item.set.name} • {item.userLanguage.split(' ')[0]}</p>
+                    <p className="text-xs text-slate-400 truncate">{item.set?.name || 'Unbekanntes Set'} • {item.userLanguage.split(' ')[0]}</p>
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-cyan-400 font-bold">{item.userPrice} €</span>
                       <div className="flex items-center gap-1">
@@ -306,7 +287,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- WATCHLIST TAB --- */}
         {activeTab === 'watchlist' && (
           <div className="space-y-4 fade-in">
             {watchlist.length === 0 ? (
@@ -314,14 +294,14 @@ export default function App() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {watchlist.map((card) => {
-                  const minPrice = calculatePrice(card, 'Poor', 'Chinesisch 🇨🇳'); // Günstigste Kombi als Demo
-                  const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');  // Teuerste Kombi als Demo
+                  const minPrice = calculatePrice(card, 'Poor', 'Chinesisch 🇨🇳'); 
+                  const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');  
                   return (
                     <div key={card.id} className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors">
-                      <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images.small} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
+                      <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small || ''} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
                       <div className="flex-1">
                         <h4 className="font-bold text-slate-200">{card.name}</h4>
-                        <p className="text-xs text-slate-400">{card.set.name}</p>
+                        <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-xs text-cyan-400">Spanne: ~{minPrice}€ bis ~{maxPrice}€</p>
                           {getTrendIcon(card)}
@@ -336,7 +316,6 @@ export default function App() {
           </div>
         )}
 
-        {/* --- SUCHE TAB --- */}
         {activeTab === 'search' && (
           <div className="space-y-6 fade-in">
             <form onSubmit={handleSearch} className="flex gap-2">
@@ -344,20 +323,23 @@ export default function App() {
               <button type="submit" className="bg-cyan-500 text-slate-950 font-bold px-6 py-3 rounded-xl hover:bg-cyan-400 transition-colors">Suche</button>
             </form>
             
+            {loading && <div className="text-center text-cyan-400 py-10">Lade Karten...</div>}
+            {searchError && <div className="text-center text-rose-400 py-10">{searchError}</div>}
+            
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-              {searchResults.map((card) => {
+              {Array.isArray(searchResults) && searchResults.map((card) => {
                 const minPrice = calculatePrice(card, 'Poor', 'Koreanisch 🇰🇷');
                 const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');
                 return (
                   <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
-                    <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                    <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small || ''} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}</h3>
-                    <p className="text-xs text-slate-400 truncate">{card.set.name}</p>
+                    <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
                     <div className="mt-1">
                       <p className="text-cyan-400 font-bold text-xs">{minPrice} € – {maxPrice} €</p>
                     </div>
                     <div className="flex gap-1 mt-3">
-                      <button onClick={() => { setSelectedCard(card); setModalType('collection'); }} className="flex-1 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold py-2 rounded-lg border border-cyan-500/30 transition-colors">➕ Collection</button>
+                      <button onClick={() => { setSelectedCard(card); setModalType('collection'); }} className="flex-1 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold py-2 rounded-lg border border-cyan-500/30 transition-colors">➕ Coll</button>
                       <button onClick={() => { setSelectedCard(card); setModalType('watchlist'); addToWatchlist(); }} className="bg-slate-800 text-slate-300 hover:text-cyan-400 text-xs px-3 rounded-lg border border-slate-700 transition-colors">★</button>
                     </div>
                   </div>
@@ -368,66 +350,38 @@ export default function App() {
         )}
       </main>
 
-      {/* --- UNTERE NAVIGATION (BOTTOM NAV) --- */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-cyan-500/20 px-6 py-2 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
         <div className="max-w-md mx-auto flex justify-between items-center">
-          <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
-            <span className="text-lg">👤</span><span>Profil</span>
-          </button>
-          <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
-            <span className="text-lg">🎴</span><span>Collection</span>
-          </button>
-          <button onClick={() => setActiveTab('watchlist')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
-            <span className="text-lg">★</span><span>Watchlist</span>
-          </button>
-          <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
-            <span className="text-lg">🔍</span><span>Suchen</span>
-          </button>
+          <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">👤</span><span>Profil</span></button>
+          <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🎴</span><span>Collection</span></button>
+          <button onClick={() => setActiveTab('watchlist')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">★</span><span>Watchlist</span></button>
+          <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🔍</span><span>Suchen</span></button>
         </div>
       </nav>
 
-      {/* --- MODAL (Details & Hinzufügen) --- */}
       {modalType && selectedCard && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
-            
-            {/* Kopfbereich im Modal */}
             <div className="flex gap-4 mb-4">
-              <img src={selectedCard.images.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
+              <img src={selectedCard.images?.small || ''} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
               <div>
                 <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}</h3>
-                <p className="text-sm text-slate-400">{selectedCard.set.name}</p>
-                <div className="mt-2 text-xs text-slate-300">
-                  Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span>
-                </div>
+                <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
+                <div className="mt-2 text-xs text-slate-300">Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span></div>
               </div>
             </div>
 
-            {/* Preisverlauf / Diagramm */}
             {modalType === 'detail' && (
               <div className="space-y-4 mb-4 border-t border-slate-800 pt-4">
-                <h4 className="text-sm font-bold text-cyan-400 flex justify-between">
-                  <span>Preisverlauf</span>
-                  <span>{getTrendIcon(selectedCard)}</span>
-                </h4>
+                <h4 className="text-sm font-bold text-cyan-400 flex justify-between"><span>Preisverlauf</span><span>{getTrendIcon(selectedCard)}</span></h4>
                 <div className="flex items-end gap-2 h-24 bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <div className="flex-1 flex flex-col items-center justify-end gap-1">
-                    <div className="w-full bg-slate-700 rounded-t-sm" style={{height: '60%'}}></div>
-                    <span className="text-[10px] text-slate-500">30 T</span>
-                  </div>
-                  <div className="flex-1 flex flex-col items-center justify-end gap-1">
-                    <div className="w-full bg-cyan-800 rounded-t-sm" style={{height: '75%'}}></div>
-                    <span className="text-[10px] text-slate-500">7 T</span>
-                  </div>
-                  <div className="flex-1 flex flex-col items-center justify-end gap-1">
-                    <div className="w-full bg-cyan-400 rounded-t-sm relative" style={{height: '90%'}}></div>
-                    <span className="text-[10px] text-cyan-400 font-bold">Heute</span>
-                  </div>
+                  <div className="flex-1 flex flex-col items-center justify-end gap-1"><div className="w-full bg-slate-700 rounded-t-sm" style={{height: '60%'}}></div><span className="text-[10px] text-slate-500">30 T</span></div>
+                  <div className="flex-1 flex flex-col items-center justify-end gap-1"><div className="w-full bg-cyan-800 rounded-t-sm" style={{height: '75%'}}></div><span className="text-[10px] text-slate-500">7 T</span></div>
+                  <div className="flex-1 flex flex-col items-center justify-end gap-1"><div className="w-full bg-cyan-400 rounded-t-sm relative" style={{height: '90%'}}></div><span className="text-[10px] text-cyan-400 font-bold">Heute</span></div>
                 </div>
               </div>
             )}
 
-            {/* Collection Eingabefelder */}
             {modalType === 'collection' && (
               <div className="space-y-3 mb-4 border-t border-slate-800 pt-3">
                 <div>
@@ -453,12 +407,9 @@ export default function App() {
               </div>
             )}
 
-            {/* Buttons im Modal */}
             <div className="flex gap-2 pt-2">
               <button onClick={() => { setModalType(null); setCustomPrice(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
-              {modalType === 'collection' && (
-                <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>
-              )}
+              {modalType === 'collection' && <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>}
             </div>
           </div>
         </div>
