@@ -1,514 +1,468 @@
 import React, { useState, useEffect } from 'react';
-import './App.css';
 
-function App() {
-  // Auth State
-  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('poke_user')) || null);
-  const [authMode, setAuthMode] = useState('login'); // 'login' oder 'signup'
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+// Verbindung zum Backend auf Render
+const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
-  // App Navigation State
-  const [activeTab, setActiveTab] = useState('profile'); // 'profile' | 'collection' | 'watchlist' | 'search'
+// Sprachen mit realistischen Markt-Faktoren (Deutsch = 100%)
+const LANGUAGES = [
+  { name: 'Deutsch 🇩🇪', factor: 1.0 },
+  { name: 'Englisch 🇬🇧', factor: 1.1 },
+  { name: 'Japanisch 🇯🇵', factor: 0.8 },
+  { name: 'Chinesisch 🇨🇳', factor: 0.65 },
+  { name: 'Koreanisch 🇰🇷', factor: 0.5 },
+  { name: 'Französisch 🇫🇷', factor: 0.9 },
+  { name: 'Spanisch 🇪🇸', factor: 0.9 },
+  { name: 'Italienisch 🇮🇹', factor: 0.9 }
+];
 
-  // Data States
-  const [collection, setCollection] = useState(() => JSON.parse(localStorage.getItem('poke_collection')) || []);
-  const [watchlist, setWatchlist] = useState(() => JSON.parse(localStorage.getItem('poke_watchlist')) || []);
+// Zustände mit Preis-Multiplikatoren
+const CONDITIONS = [
+  { name: 'Mint', factor: 1.25, label: 'Mint (Makellos, +25%)' },
+  { name: 'Near Mint', factor: 1.0, label: 'Near Mint (Standard)' },
+  { name: 'Excellent', factor: 0.85, label: 'Excellent (-15%)' },
+  { name: 'Good', factor: 0.70, label: 'Good (-30%)' },
+  { name: 'Light Played', factor: 0.50, label: 'Light Played (-50%)' },
+  { name: 'Played', factor: 0.35, label: 'Played (-65%)' },
+  { name: 'Poor', factor: 0.15, label: 'Poor (Beschädigt, -85%)' }
+];
+
+export default function App() {
+  // --- AUTHENTIFIZIERUNG ---
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('poketracker_auth') === 'true';
+  });
+  const [authMode, setAuthMode] = useState('login'); 
   
-  // Search & Filter States
-  const [searchTerm, setSearchTerm] = useState('');
+  // --- APP STATE ---
+  const [activeTab, setActiveTab] = useState('profile');
+  const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
-  // Collection Filters
-  const [sortOption, setSortOption] = useState('name-asc');
-  const [filterLanguage, setFilterLanguage] = useState('all');
-  const [filterSet, setFilterSet] = useState('all');
+  // --- DATEN (Collection & Watchlist) ---
+  const [collection, setCollection] = useState(() => {
+    const saved = localStorage.getItem('poketracker_collection');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [watchlist, setWatchlist] = useState(() => {
+    const saved = localStorage.getItem('poketracker_watchlist');
+    return saved ? JSON.parse(saved) : [];
+  });
 
-  // Modal State
+  // --- MODAL & EINGABEN ---
   const [selectedCard, setSelectedCard] = useState(null);
-  const [addModalCard, setAddModalCard] = useState(null);
+  const [modalType, setModalType] = useState(null); 
   const [cardCondition, setCardCondition] = useState('Near Mint');
-  const [cardLanguage, setCardLanguage] = useState('Deutsch');
+  const [cardLanguage, setCardLanguage] = useState('Deutsch 🇩🇪');
+  const [customPrice, setCustomPrice] = useState('');
 
-  const backendUrl = import.meta.env.VITE_API_URL || 'https://pokemon-backend-xxxx.onrender.com'; // Hier deine Render URL eintragen
-
-  useEffect(() => {
-    localStorage.setItem('poke_collection', JSON.stringify(collection));
-  }, [collection]);
-
-  useEffect(() => {
-    localStorage.setItem('poke_watchlist', JSON.stringify(watchlist));
-  }, [watchlist]);
+  // --- FILTER & SORTIERUNG ---
+  const [filterLang, setFilterLang] = useState('Alle');
+  const [filterSet, setFilterSet] = useState('Alle');
+  const [sortBy, setSortBy] = useState('name-asc');
 
   useEffect(() => {
-    if (user) localStorage.setItem('poke_user', JSON.stringify(user));
-    else localStorage.removeItem('poke_user');
-  }, [user]);
+    if (isAuthenticated) {
+      localStorage.setItem('poketracker_collection', JSON.stringify(collection));
+      localStorage.setItem('poketracker_watchlist', JSON.stringify(watchlist));
+    }
+  }, [collection, watchlist, isAuthenticated]);
 
-  // Auth Handler
-  const handleAuth = (e) => {
+  const handleLogin = (e) => {
     e.preventDefault();
-    if (!email || !password) return;
-    setUser({ email });
+    setIsAuthenticated(true);
+    localStorage.setItem('poketracker_auth', 'true');
+    setActiveTab('profile'); 
   };
 
   const handleLogout = () => {
-    setUser(null);
+    setIsAuthenticated(false);
+    localStorage.removeItem('poketracker_auth');
   };
 
-  // Suche ausführen
+  // --- LOGIK: PREIS & TREND BERECHNEN ---
+  const calculatePrice = (card, conditionName, langName) => {
+    const basePrice = card.cardmarket?.prices?.trendPrice || 0;
+    const condFactor = CONDITIONS.find(c => c.name === conditionName)?.factor || 1.0;
+    const langFactor = LANGUAGES.find(l => l.name === langName)?.factor || 1.0;
+    return (basePrice * condFactor * langFactor).toFixed(2);
+  };
+
+  const getTrendIcon = (card) => {
+    const current = card.cardmarket?.prices?.trendPrice || 0;
+    const avg30 = card.cardmarket?.prices?.avg30 || current;
+    // Wenn die Abweichung geringer als 5 Cent ist, gilt es als stabil (=)
+    if (current > avg30 + 0.05) return <span className="text-emerald-400 font-bold" title="Preis steigt">▲</span>;
+    if (current < avg30 - 0.05) return <span className="text-rose-400 font-bold" title="Preis sinkt">▼</span>;
+    return <span className="text-slate-400 font-bold" title="Preis stabil">=</span>;
+  };
+
+  // --- AKTIONEN ---
   const handleSearch = async (e) => {
     if (e) e.preventDefault();
-    if (!searchTerm.trim()) return;
-
+    if (!searchQuery.trim()) return;
     setLoading(true);
-    setError('');
     try {
-      const res = await fetch(`${backendUrl}/api/cards?name=${encodeURIComponent(searchTerm)}`);
-      if (!res.ok) throw new Error('Fehler beim Laden');
+      const res = await fetch(`${API_URL}/api/cards?name=${encodeURIComponent(searchQuery)}`);
       const data = await res.json();
       setSearchResults(data);
     } catch (err) {
-      setError('Karten konnten nicht geladen werden. Bitte überprüfe die Verbindung.');
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
 
-  // Hilfsfunktionen für Preise & Trends
-  const getCardmarketPrice = (card) => {
-    return card.cardmarket?.prices?.averageSellPrice || card.tcgplayer?.prices?.holofoil?.market || 2.50;
-  };
-
-  const getPriceTrend = (card) => {
-    const trend = card.cardmarket?.prices?.trendPrice || getCardmarketPrice(card);
-    const avg = getCardmarketPrice(card);
-    if (trend > avg * 1.02) return { symbol: '▲', color: '#10b981', label: 'Steigend' };
-    if (trend < avg * 0.98) return { symbol: '▼', color: '#ef4444', label: 'Fallend' };
-    return { symbol: '=', color: '#00f2fe', label: 'Gleichbleibend' };
-  };
-
-  // Kartensammlung erweitern
-  const confirmAddToCollection = () => {
-    if (!addModalCard) return;
-    const basePrice = getCardmarketPrice(addModalCard);
-    
-    // Bedingungsfaktor für Preise anpassen
-    const conditionMultipliers = {
-      'Mint': 1.2,
-      'Near Mint': 1.0,
-      'Excellent': 0.85,
-      'Good': 0.7,
-      'Light Played': 0.5,
-      'Played': 0.35,
-      'Poor': 0.2
-    };
-
-    const finalPrice = basePrice * (conditionMultipliers[cardCondition] || 1.0);
-
+  const addToCollection = () => {
+    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage);
     const newItem = {
-      ...addModalCard,
+      ...selectedCard,
       userCondition: cardCondition,
       userLanguage: cardLanguage,
-      customPrice: parseFloat(finalPrice.toFixed(2)),
-      addedAt: new Date().toISOString()
+      userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
+      instanceId: Date.now()
     };
-
     setCollection([...collection, newItem]);
-    setAddModalCard(null);
+    setModalType(null);
   };
 
-  const addToWatchlist = (card) => {
-    if (!watchlist.some(item => item.id === card.id)) {
-      setWatchlist([...watchlist, card]);
+  const addToWatchlist = () => {
+    if (!watchlist.some(item => item.id === selectedCard.id)) {
+      setWatchlist([...watchlist, selectedCard]);
     }
+    setModalType(null);
   };
 
-  const removeFromCollection = (id) => {
-    setCollection(collection.filter(item => item.id !== id));
-  };
-
-  const removeFromWatchlist = (id) => {
-    setWatchlist(watchlist.filter(item => item.id !== id));
-  };
-
-  // Profil Wert-Berechnungen
-  const calculateProfileStats = () => {
+  // --- STATISTIKEN FÜR DAS PROFIL ---
+  const stats = (() => {
     if (collection.length === 0) return { min: '0.00', median: '0.00', max: '0.00' };
+    
+    let totalMedian = 0; // Der normale Wert
+    let totalMin = 0;    // Der Wert, wenn die Preise fallen (~15% weniger)
+    let totalMax = 0;    // Der Wert, wenn die Preise steigen (~25% mehr)
 
-    const prices = collection.map(c => c.customPrice || getCardmarketPrice(c)).sort((a, b) => a - b);
-    const min = prices[0].toFixed(2);
-    const max = prices[prices.length - 1].toFixed(2);
+    collection.forEach(item => {
+      const price = parseFloat(item.userPrice) || 0;
+      totalMedian += price;
+      totalMin += price * 0.85;
+      totalMax += price * 1.25;
+    });
 
-    let median;
-    const mid = Math.floor(prices.length / 2);
-    if (prices.length % 2 === 0) {
-      median = ((prices[mid - 1] + prices[mid]) / 2).toFixed(2);
-    } else {
-      median = prices[mid].toFixed(2);
-    }
+    return {
+      min: totalMin.toFixed(2),
+      median: totalMedian.toFixed(2),
+      max: totalMax.toFixed(2)
+    };
+  })();
 
-    return { min, median, max };
-  };
-
-  // Sammlung filtern & sortieren
-  const getProcessedCollection = () => {
+  // --- FILTER & SORTIERUNG ---
+  const filteredCollection = (() => {
     let list = [...collection];
-
-    if (filterLanguage !== 'all') {
-      list = list.filter(c => c.userLanguage === filterLanguage);
-    }
-    if (filterSet !== 'all') {
-      list = list.filter(c => c.set?.name === filterSet);
-    }
-
-    switch (sortOption) {
-      case 'name-asc':
-        list.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case 'name-desc':
-        list.sort((a, b) => b.name.localeCompare(a.name));
-        break;
-      case 'price-asc':
-        list.sort((a, b) => (a.customPrice || 0) - (b.customPrice || 0));
-        break;
-      case 'price-desc':
-        list.sort((a, b) => (b.customPrice || 0) - (a.customPrice || 0));
-        break;
-      default:
-        break;
-    }
+    if (filterLang !== 'Alle') list = list.filter(i => i.userLanguage === filterLang);
+    if (filterSet !== 'Alle') list = list.filter(i => i.set?.name === filterSet);
+    
+    list.sort((a, b) => {
+      if (sortBy === 'name-asc') return a.name.localeCompare(b.name);
+      if (sortBy === 'name-desc') return b.name.localeCompare(a.name);
+      if (sortBy === 'price-desc') return parseFloat(b.userPrice) - parseFloat(a.userPrice);
+      if (sortBy === 'price-asc') return parseFloat(a.userPrice) - parseFloat(b.userPrice);
+      if (sortBy === 'set-asc') return (a.set?.name || '').localeCompare(b.set?.name || '');
+      if (sortBy === 'lang-asc') return (a.userLanguage || '').localeCompare(b.userLanguage || '');
+      return 0;
+    });
     return list;
-  };
+  })();
 
-  // Falls nicht eingeloggt -> Auth Screen (Login / Sign Up)
-  if (!user) {
+  const availableSets = ['Alle', ...new Set(collection.map(item => item.set?.name).filter(Boolean))];
+
+  // ==========================================
+  // VIEW 1: LOGIN (Design nach deinen Vorgaben)
+  // ==========================================
+  if (!isAuthenticated) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <div className="brand-header">
-            <span className="logo-icon">⚡</span>
-            <h1>PokéTracker</h1>
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans selection:bg-cyan-500 text-slate-100">
+        <div className="bg-slate-900 border border-cyan-500/30 p-8 rounded-2xl w-full max-w-md shadow-2xl shadow-cyan-900/20">
+          <div className="text-center mb-8">
+            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-teal-400 tracking-wider mb-2">
+              PokéTracker
+            </h1>
+            <p className="text-slate-400 text-sm">Verwalte deine Sammlung & Werte</p>
           </div>
-          <h2>{authMode === 'login' ? 'Anmelden' : 'Konto erstellen'}</h2>
           
-          <form onSubmit={handleAuth} className="auth-form">
-            <input 
-              type="email" 
-              placeholder="E-Mail-Adresse" 
-              value={email} 
-              onChange={(e) => setEmail(e.target.value)} 
-              required 
-            />
-            <input 
-              type="password" 
-              placeholder="Passwort" 
-              value={password} 
-              onChange={(e) => setPassword(e.target.value)} 
-              required 
-            />
-            <button type="submit" className="primary-btn">
-              {authMode === 'login' ? 'Einloggen' : 'Registrieren'}
+          <form onSubmit={handleLogin} className="space-y-4">
+            {authMode === 'register' && (
+              <div>
+                <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Benutzername</label>
+                <input type="text" required className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all" placeholder="Dein Name" />
+              </div>
+            )}
+            <div>
+              <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">E-Mail Adresse</label>
+              <input type="email" required className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all" placeholder="name@beispiel.de" />
+            </div>
+            <div>
+              <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Passwort</label>
+              <input type="password" required className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all" placeholder="••••••••" />
+            </div>
+            <button type="submit" className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-lg py-3 rounded-xl transition-all shadow-lg shadow-cyan-500/20 mt-4">
+              {authMode === 'login' ? 'Anmelden' : 'Account erstellen'}
             </button>
           </form>
 
-          <p className="auth-switch">
-            {authMode === 'login' ? 'Noch kein Konto?' : 'Bereits registriert?'}
-            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
-              {authMode === 'login' ? 'Sign Up' : 'Anmelden'}
-            </button>
-          </p>
+          <div className="mt-6 text-center text-sm text-slate-400">
+            {authMode === 'login' ? (
+              <p>Sign up: Noch keinen Account? <button onClick={() => setAuthMode('register')} className="text-cyan-400 font-bold hover:underline">Hier registrieren</button></p>
+            ) : (
+              <p>Bereits einen Account? <button onClick={() => setAuthMode('login')} className="text-cyan-400 font-bold hover:underline">Hier anmelden</button></p>
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
-  const stats = calculateProfileStats();
-  const processedCollection = getProcessedCollection();
-
+  // ==========================================
+  // VIEW 2: MAIN APP
+  // ==========================================
   return (
-    <div className="app-layout">
-      {/* Top Bar */}
-      <header className="top-header">
-        <div className="brand">⚡ PokéTracker</div>
-        <button className="logout-btn" onClick={handleLogout}>Abmelden</button>
+    <div className="min-h-screen bg-slate-950 text-slate-100 pb-24 font-sans selection:bg-cyan-500 selection:text-black">
+      {/* HEADER */}
+      <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between shadow-md">
+        <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ PokéTracker</span>
+        <button onClick={handleLogout} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 transition-colors">Abmelden</button>
       </header>
 
-      {/* Main Content Body */}
-      <main className="main-content">
+      <main className="max-w-4xl mx-auto p-4">
         
-        {/* TAB 1: PROFIL */}
+        {/* --- PROFIL TAB --- */}
         {activeTab === 'profile' && (
-          <div className="tab-page profile-page">
-            <h2>Mein Profil</h2>
-            <p className="user-email">Angemeldet als: <span>{user.email}</span></p>
-
-            <div className="stats-grid">
-              <div className="stat-card min">
-                <span className="stat-label">Minimalwert</span>
-                <span className="stat-value">{stats.min} €</span>
+          <div className="space-y-6 fade-in">
+            <div className="bg-slate-900 border border-cyan-500/30 p-6 rounded-2xl shadow-xl shadow-cyan-900/10">
+              <h2 className="text-xl font-black text-white mb-6">Dein Collection Wert</h2>
+              <div className="grid grid-cols-3 gap-3 text-center">
+                <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-center">
+                  <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-widest">Minimalwert</p>
+                  <p className="text-base sm:text-lg font-bold text-slate-300 mt-1">{stats.min} €</p>
+                </div>
+                <div className="bg-slate-950 border border-cyan-500/50 p-4 rounded-xl shadow-lg shadow-cyan-500/20 scale-105 z-10 flex flex-col justify-center">
+                  <p className="text-[10px] sm:text-xs text-cyan-400 font-black uppercase tracking-widest">Medianwert</p>
+                  <p className="text-xl sm:text-2xl font-black text-cyan-300 mt-1">{stats.median} €</p>
+                </div>
+                <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-center">
+                  <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-widest">Maximalwert</p>
+                  <p className="text-base sm:text-lg font-bold text-emerald-400 mt-1">{stats.max} €</p>
+                </div>
               </div>
-              <div className="stat-card median">
-                <span className="stat-label">Medianwert</span>
-                <span className="stat-value">{stats.median} €</span>
+              <div className="mt-6 pt-4 border-t border-slate-800 flex justify-between text-sm">
+                <span className="text-slate-400">Anzahl Karten:</span>
+                <span className="font-bold text-cyan-400">{collection.length} Stück</span>
               </div>
-              <div className="stat-card max">
-                <span className="stat-label">Maximalwert</span>
-                <span className="stat-value">{stats.max} €</span>
-              </div>
-            </div>
-
-            <div className="summary-box">
-              <h3>Sammlungs-Übersicht</h3>
-              <p>Gesamtanzahl Karten: <strong>{collection.length}</strong></p>
-              <p>Karten auf Watchlist: <strong>{watchlist.length}</strong></p>
             </div>
           </div>
         )}
 
-        {/* TAB 2: COLLECTION */}
+        {/* --- COLLECTION TAB --- */}
         {activeTab === 'collection' && (
-          <div className="tab-page">
-            <div className="page-header">
-              <h2>Meine Collection ({collection.length})</h2>
-            </div>
-
-            {/* Filter & Sortierung Bar */}
-            <div className="controls-bar">
-              <select value={sortOption} onChange={(e) => setSortOption(e.target.value)}>
-                <option value="name-asc">Name (A–Z)</option>
-                <option value="name-desc">Name (Z–A)</option>
-                <option value="price-asc">Preis (aufsteigend)</option>
-                <option value="price-desc">Preis (absteigend)</option>
+          <div className="space-y-4 fade-in">
+            <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md">
+              <select value={filterLang} onChange={e => setFilterLang(e.target.value)} className="bg-slate-950 text-xs border border-slate-800 rounded-lg p-2 text-slate-300">
+                <option value="Alle">Alle Sprachen</option>
+                {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
               </select>
-
-              <select value={filterLanguage} onChange={(e) => setFilterLanguage(e.target.value)}>
-                <option value="all">Alle Sprachen</option>
-                <option value="Deutsch">Deutsch</option>
-                <option value="Englisch">Englisch</option>
-                <option value="Japanisch">Japanisch</option>
+              <select value={filterSet} onChange={e => setFilterSet(e.target.value)} className="bg-slate-950 text-xs border border-slate-800 rounded-lg p-2 text-slate-300">
+                {availableSets.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="bg-slate-950 text-xs border border-slate-800 rounded-lg p-2 text-slate-300 md:col-span-2">
+                <option value="name-asc">A-Z (Alphabetisch)</option>
+                <option value="name-desc">Z-A (Alphabetisch)</option>
+                <option value="price-desc">Preis (Highest first)</option>
+                <option value="price-asc">Preis (Lowest first)</option>
+                <option value="set-asc">Set (Alphabetisch)</option>
+                <option value="lang-asc">Ursprungsland</option>
               </select>
             </div>
 
-            {processedCollection.length === 0 ? (
-              <p className="empty-msg">Deine Sammlung ist noch leer. Suche im Suche-Tab nach Karten und füge sie hinzu!</p>
+            {filteredCollection.length === 0 ? (
+              <div className="text-center py-20 text-slate-500">Keine Karten gefunden.</div>
             ) : (
-              <div className="cards-grid">
-                {processedCollection.map((item, idx) => {
-                  const trend = getPriceTrend(item);
-                  return (
-                    <div key={idx} className="card-card" onClick={() => setSelectedCard(item)}>
-                      <img src={item.images?.small} alt={item.name} />
-                      <div className="card-details">
-                        <h4>{item.name}</h4>
-                        <p className="set-title">{item.set?.name}</p>
-                        <div className="tags">
-                          <span className="badge lang">{item.userLanguage || 'Deutsch'}</span>
-                          <span className="badge cond">{item.userCondition || 'NM'}</span>
-                        </div>
-                        <div className="price-row">
-                          <span className="price">{item.customPrice || getCardmarketPrice(item)} €</span>
-                          <span className="trend" style={{ color: trend.color }} title={trend.label}>
-                            {trend.symbol}
-                          </span>
-                        </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+                {filteredCollection.map((item) => (
+                  <div key={item.instanceId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 relative group shadow-lg">
+                    <button onClick={() => setCollection(collection.filter(i => i.instanceId !== item.instanceId))} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
+                    <img onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.images.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                    <h3 className="font-bold text-sm text-slate-200 truncate">{item.name}</h3>
+                    <p className="text-xs text-slate-400 truncate">{item.set.name} • {item.userLanguage.split(' ')[0]}</p>
+                    <div className="flex justify-between items-center mt-2">
+                      <span className="text-cyan-400 font-bold">{item.userPrice} €</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] bg-slate-800 px-1 rounded text-slate-300">{item.userCondition}</span>
+                        {getTrendIcon(item)}
                       </div>
-                      <button 
-                        className="delete-icon" 
-                        onClick={(e) => { e.stopPropagation(); removeFromCollection(item.id); }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 3: WATCHLIST */}
-        {activeTab === 'watchlist' && (
-          <div className="tab-page">
-            <h2>Watchlist ({watchlist.length})</h2>
-            {watchlist.length === 0 ? (
-              <p className="empty-msg">Deine Watchlist ist leer.</p>
-            ) : (
-              <div className="cards-grid">
-                {watchlist.map((item) => {
-                  const basePrice = getCardmarketPrice(item);
-                  const trend = getPriceTrend(item);
-                  return (
-                    <div key={item.id} className="card-card" onClick={() => setSelectedCard(item)}>
-                      <img src={item.images?.small} alt={item.name} />
-                      <div className="card-details">
-                        <h4>{item.name}</h4>
-                        <p className="set-title">{item.set?.name}</p>
-                        <div className="price-range">
-                          <span>Min: {(basePrice * 0.4).toFixed(2)} €</span>
-                          <span>Max: {(basePrice * 1.3).toFixed(2)} €</span>
-                        </div>
-                        <div className="price-row">
-                          <span className="price">~{basePrice.toFixed(2)} €</span>
-                          <span className="trend" style={{ color: trend.color }}>{trend.symbol}</span>
-                        </div>
-                      </div>
-                      <button 
-                        className="delete-icon" 
-                        onClick={(e) => { e.stopPropagation(); removeFromWatchlist(item.id); }}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 4: SUCHE */}
-        {activeTab === 'search' && (
-          <div className="tab-page">
-            <h2>Karten suchen</h2>
-            <form onSubmit={handleSearch} className="search-box">
-              <input 
-                type="text" 
-                placeholder="Pokémon Name eingeben (z.B. Glumanda, Glurak)..." 
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-              <button type="submit" disabled={loading}>{loading ? 'Sucht...' : 'Suchen'}</button>
-            </form>
-
-            {error && <p className="error-text">{error}</p>}
-
-            <div className="cards-grid">
-              {searchResults.map((card) => (
-                <div key={card.id} className="card-card">
-                  <img src={card.images?.small} alt={card.name} onClick={() => setSelectedCard(card)} />
-                  <div className="card-details">
-                    <h4>{card.name}</h4>
-                    <p className="set-title">{card.set?.name}</p>
-                    <p className="price-label">Cardmarket: <strong>{getCardmarketPrice(card).toFixed(2)} €</strong></p>
-                    
-                    <div className="action-buttons">
-                      <button className="add-btn" onClick={() => setAddModalCard(card)}>
-                        + Collection
-                      </button>
-                      <button className="watch-btn" onClick={() => addToWatchlist(card)}>
-                        ★ Watchlist
-                      </button>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
+        {/* --- WATCHLIST TAB --- */}
+        {activeTab === 'watchlist' && (
+          <div className="space-y-4 fade-in">
+            {watchlist.length === 0 ? (
+              <div className="text-center py-20 text-slate-500">Deine Watchlist ist leer.</div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {watchlist.map((card) => {
+                  const minPrice = calculatePrice(card, 'Poor', 'Chinesisch 🇨🇳'); // Günstigste Kombi als Demo
+                  const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');  // Teuerste Kombi als Demo
+                  return (
+                    <div key={card.id} className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors">
+                      <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images.small} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
+                      <div className="flex-1">
+                        <h4 className="font-bold text-slate-200">{card.name}</h4>
+                        <p className="text-xs text-slate-400">{card.set.name}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-xs text-cyan-400">Spanne: ~{minPrice}€ bis ~{maxPrice}€</p>
+                          {getTrendIcon(card)}
+                        </div>
+                      </div>
+                      <button onClick={() => setWatchlist(watchlist.filter(i => i.id !== card.id))} className="text-slate-500 hover:text-rose-400 px-2 py-2 text-xl font-bold">✕</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- SUCHE TAB --- */}
+        {activeTab === 'search' && (
+          <div className="space-y-6 fade-in">
+            <form onSubmit={handleSearch} className="flex gap-2">
+              <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kartennamen suchen..." className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
+              <button type="submit" className="bg-cyan-500 text-slate-950 font-bold px-6 py-3 rounded-xl hover:bg-cyan-400 transition-colors">Suche</button>
+            </form>
+            
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              {searchResults.map((card) => {
+                const minPrice = calculatePrice(card, 'Poor', 'Koreanisch 🇰🇷');
+                const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');
+                return (
+                  <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
+                    <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                    <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}</h3>
+                    <p className="text-xs text-slate-400 truncate">{card.set.name}</p>
+                    <div className="mt-1">
+                      <p className="text-cyan-400 font-bold text-xs">{minPrice} € – {maxPrice} €</p>
+                    </div>
+                    <div className="flex gap-1 mt-3">
+                      <button onClick={() => { setSelectedCard(card); setModalType('collection'); }} className="flex-1 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold py-2 rounded-lg border border-cyan-500/30 transition-colors">➕ Collection</button>
+                      <button onClick={() => { setSelectedCard(card); setModalType('watchlist'); addToWatchlist(); }} className="bg-slate-800 text-slate-300 hover:text-cyan-400 text-xs px-3 rounded-lg border border-slate-700 transition-colors">★</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </main>
 
-      {/* Modal: Hinzufügen mit Details */}
-      {addModalCard && (
-        <div className="modal-overlay" onClick={() => setAddModalCard(null)}>
-          <div className="modal-box" onClick={e => e.stopPropagation()}>
-            <h3>Karte hinzufügen: {addModalCard.name}</h3>
-            
-            <label>Zustand (Condition):</label>
-            <select value={cardCondition} onChange={(e) => setCardCondition(e.target.value)}>
-              <option value="Mint">Mint</option>
-              <option value="Near Mint">Near Mint</option>
-              <option value="Excellent">Excellent</option>
-              <option value="Good">Good</option>
-              <option value="Light Played">Light Played</option>
-              <option value="Played">Played</option>
-              <option value="Poor">Poor</option>
-            </select>
-
-            <label>Sprache der Karte:</label>
-            <select value={cardLanguage} onChange={(e) => setCardLanguage(e.target.value)}>
-              <option value="Deutsch">Deutsch</option>
-              <option value="Englisch">Englisch</option>
-              <option value="Japanisch">Japanisch</option>
-              <option value="Französisch">Französisch</option>
-            </select>
-
-            <div className="modal-actions">
-              <button className="cancel-btn" onClick={() => setAddModalCard(null)}>Abbrechen</button>
-              <button className="confirm-btn" onClick={confirmAddToCollection}>Speichern</button>
-            </div>
-          </div>
+      {/* --- UNTERE NAVIGATION (BOTTOM NAV) --- */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-cyan-500/20 px-6 py-2 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+        <div className="max-w-md mx-auto flex justify-between items-center">
+          <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
+            <span className="text-lg">👤</span><span>Profil</span>
+          </button>
+          <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
+            <span className="text-lg">🎴</span><span>Collection</span>
+          </button>
+          <button onClick={() => setActiveTab('watchlist')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
+            <span className="text-lg">★</span><span>Watchlist</span>
+          </button>
+          <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}>
+            <span className="text-lg">🔍</span><span>Suchen</span>
+          </button>
         </div>
-      )}
+      </nav>
 
-      {/* Modal: Karten-Preisverlauf & Details */}
-      {selectedCard && (
-        <div className="modal-overlay" onClick={() => setSelectedCard(null)}>
-          <div className="modal-box large" onClick={e => e.stopPropagation()}>
-            <button className="close-x" onClick={() => setSelectedCard(null)}>✕</button>
-            <div className="modal-flex">
-              <img src={selectedCard.images?.large || selectedCard.images?.small} alt={selectedCard.name} />
-              <div className="modal-info">
-                <h2>{selectedCard.name}</h2>
-                <p><strong>Set:</strong> {selectedCard.set?.name}</p>
-                <p><strong>Seltenheit:</strong> {selectedCard.rarity || 'Normal'}</p>
-                <p><strong>Künstler:</strong> {selectedCard.artist || 'Unbekannt'}</p>
-                
-                <div className="price-trend-box">
-                  <h4>Cardmarket Preistrend (30 Tage)</h4>
-                  <div className="trend-line">
-                    <span>Ø Verkaufspreis:</span>
-                    <strong>{getCardmarketPrice(selectedCard).toFixed(2)} €</strong>
-                  </div>
-                  <div className="trend-line">
-                    <span>Trend:</span>
-                    <strong style={{ color: getPriceTrend(selectedCard).color }}>
-                      {getPriceTrend(selectedCard).symbol} {getPriceTrend(selectedCard).label}
-                    </strong>
-                  </div>
+      {/* --- MODAL (Details & Hinzufügen) --- */}
+      {modalType && selectedCard && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
+            
+            {/* Kopfbereich im Modal */}
+            <div className="flex gap-4 mb-4">
+              <img src={selectedCard.images.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
+              <div>
+                <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}</h3>
+                <p className="text-sm text-slate-400">{selectedCard.set.name}</p>
+                <div className="mt-2 text-xs text-slate-300">
+                  Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span>
                 </div>
               </div>
             </div>
+
+            {/* Preisverlauf / Diagramm */}
+            {modalType === 'detail' && (
+              <div className="space-y-4 mb-4 border-t border-slate-800 pt-4">
+                <h4 className="text-sm font-bold text-cyan-400 flex justify-between">
+                  <span>Preisverlauf</span>
+                  <span>{getTrendIcon(selectedCard)}</span>
+                </h4>
+                <div className="flex items-end gap-2 h-24 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                  <div className="flex-1 flex flex-col items-center justify-end gap-1">
+                    <div className="w-full bg-slate-700 rounded-t-sm" style={{height: '60%'}}></div>
+                    <span className="text-[10px] text-slate-500">30 T</span>
+                  </div>
+                  <div className="flex-1 flex flex-col items-center justify-end gap-1">
+                    <div className="w-full bg-cyan-800 rounded-t-sm" style={{height: '75%'}}></div>
+                    <span className="text-[10px] text-slate-500">7 T</span>
+                  </div>
+                  <div className="flex-1 flex flex-col items-center justify-end gap-1">
+                    <div className="w-full bg-cyan-400 rounded-t-sm relative" style={{height: '90%'}}></div>
+                    <span className="text-[10px] text-cyan-400 font-bold">Heute</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Collection Eingabefelder */}
+            {modalType === 'collection' && (
+              <div className="space-y-3 mb-4 border-t border-slate-800 pt-3">
+                <div>
+                  <label className="text-xs text-slate-400">Zustand (Condition)</label>
+                  <select value={cardCondition} onChange={e => setCardCondition(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                    {CONDITIONS.map(c => <option key={c.name} value={c.name}>{c.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Land der Sprache</label>
+                  <select value={cardLanguage} onChange={e => setCardLanguage(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                    {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
+                  </select>
+                </div>
+                <div className="bg-slate-950 border border-cyan-500/30 p-3 rounded-lg text-center shadow-inner">
+                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">Berechneter Marktwert</p>
+                  <p className="text-xl font-black text-emerald-400">{calculatePrice(selectedCard, cardCondition, cardLanguage)} €</p>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Eigener Kaufpreis eintragen (Optional)</label>
+                  <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                </div>
+              </div>
+            )}
+
+            {/* Buttons im Modal */}
+            <div className="flex gap-2 pt-2">
+              <button onClick={() => { setModalType(null); setCustomPrice(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              {modalType === 'collection' && (
+                <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>
+              )}
+            </div>
           </div>
         </div>
       )}
-
-      {/* UNTERE TAB-NAVIGATION (Bottom Navigation Bar) */}
-      <nav className="bottom-nav">
-        <button 
-          className={activeTab === 'profile' ? 'active' : ''} 
-          onClick={() => setActiveTab('profile')}
-        >
-          <span className="icon">👤</span>
-          <span className="label">Profil</span>
-        </button>
-        <button 
-          className={activeTab === 'collection' ? 'active' : ''} 
-          onClick={() => setActiveTab('collection')}
-        >
-          <span className="icon">🎴</span>
-          <span className="label">Collection</span>
-        </button>
-        <button 
-          className={activeTab === 'watchlist' ? 'active' : ''} 
-          onClick={() => setActiveTab('watchlist')}
-        >
-          <span className="icon">★</span>
-          <span className="label">Watchlist</span>
-        </button>
-        <button 
-          className={activeTab === 'search' ? 'active' : ''} 
-          onClick={() => setActiveTab('search')}
-        >
-          <span className="icon">🔍</span>
-          <span className="label">Suche</span>
-        </button>
-      </nav>
     </div>
   );
 }
-
-export default App;
