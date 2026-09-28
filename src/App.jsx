@@ -24,15 +24,27 @@ const CONDITIONS = [
   { name: 'Poor', factor: 0.15, label: 'Poor (Beschädigt, -85%)' }
 ];
 
+// Sehr günstigste/teuerste Kombination, um Preisspannen (min/max) zu zeigen
+const CHEAPEST_LANG = LANGUAGES.reduce((a, b) => (a.factor < b.factor ? a : b));
+const PREMIUM_LANG = LANGUAGES.reduce((a, b) => (a.factor > b.factor ? a : b));
+
 export default function App() {
+  // --- AUTH ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('poketracker_auth') === 'true');
-  const [authMode, setAuthMode] = useState('login'); 
-  
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('poketracker_current_user') || '');
+  const [authMode, setAuthMode] = useState('login');
+  const [authUsername, setAuthUsername] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
+  const [authError, setAuthError] = useState('');
+
   const [activeTab, setActiveTab] = useState('profile');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
+  // pro Suchergebnis gewählte Condition/Sprache, um Preis live zu berechnen
+  const [searchSelections, setSearchSelections] = useState({});
 
   const [collection, setCollection] = useState(() => {
     const saved = localStorage.getItem('poketracker_collection');
@@ -44,7 +56,7 @@ export default function App() {
   });
 
   const [selectedCard, setSelectedCard] = useState(null);
-  const [modalType, setModalType] = useState(null); 
+  const [modalType, setModalType] = useState(null);
   const [cardCondition, setCardCondition] = useState('Near Mint');
   const [cardLanguage, setCardLanguage] = useState('Deutsch 🇩🇪');
   const [customPrice, setCustomPrice] = useState('');
@@ -60,23 +72,83 @@ export default function App() {
     }
   }, [collection, watchlist, isAuthenticated]);
 
+  // --- AUTH LOGIK ---
+  // Hinweis: Ohne eigenes Backend-Auth-System werden Zugangsdaten nur lokal
+  // im Browser (localStorage) gespeichert. Für echten Mehrgeräte-Zugriff
+  // bräuchte man später eine echte Nutzer-Datenbank im server.js.
+  const getStoredUsers = () => {
+    const raw = localStorage.getItem('poketracker_users');
+    return raw ? JSON.parse(raw) : {};
+  };
+
   const handleLogin = (e) => {
     e.preventDefault();
+    setAuthError('');
+    const users = getStoredUsers();
+    const uname = authUsername.trim();
+    if (!uname || !authPassword) {
+      setAuthError('Bitte Benutzername und Passwort eingeben.');
+      return;
+    }
+    if (!users[uname]) {
+      setAuthError('Diesen Benutzer gibt es noch nicht. Bitte zuerst registrieren.');
+      return;
+    }
+    if (users[uname] !== authPassword) {
+      setAuthError('Falsches Passwort.');
+      return;
+    }
     setIsAuthenticated(true);
+    setCurrentUser(uname);
     localStorage.setItem('poketracker_auth', 'true');
-    setActiveTab('profile'); 
+    localStorage.setItem('poketracker_current_user', uname);
+    setActiveTab('profile');
+  };
+
+  const handleRegister = (e) => {
+    e.preventDefault();
+    setAuthError('');
+    const uname = authUsername.trim();
+    if (!uname || !authPassword || !authPasswordConfirm) {
+      setAuthError('Bitte alle Felder ausfüllen.');
+      return;
+    }
+    if (authPassword !== authPasswordConfirm) {
+      setAuthError('Die Passwörter stimmen nicht überein.');
+      return;
+    }
+    const users = getStoredUsers();
+    if (users[uname]) {
+      setAuthError('Dieser Benutzername ist bereits vergeben.');
+      return;
+    }
+    users[uname] = authPassword;
+    localStorage.setItem('poketracker_users', JSON.stringify(users));
+    setIsAuthenticated(true);
+    setCurrentUser(uname);
+    localStorage.setItem('poketracker_auth', 'true');
+    localStorage.setItem('poketracker_current_user', uname);
+    setActiveTab('profile');
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
+    setCurrentUser('');
     localStorage.removeItem('poketracker_auth');
+    localStorage.removeItem('poketracker_current_user');
+  };
+
+  const switchAuthMode = (mode) => {
+    setAuthMode(mode);
+    setAuthError('');
+    setAuthPassword('');
+    setAuthPasswordConfirm('');
   };
 
   // --- SICHERE PREIS-LOGIK ---
   const calculatePrice = (card, conditionName, langName) => {
     if (!card) return "0.00";
-    // Sicheres Auslesen, falls cardmarket oder prices fehlen
-    const basePrice = card.cardmarket?.prices?.trendPrice || 0;
+    const basePrice = card.cardmarket?.prices?.trendPrice || card.cardmarket?.prices?.averageSellPrice || 0;
     const condFactor = CONDITIONS.find(c => c.name === conditionName)?.factor || 1.0;
     const langFactor = LANGUAGES.find(l => l.name === langName)?.factor || 1.0;
     return (basePrice * condFactor * langFactor).toFixed(2);
@@ -86,9 +158,22 @@ export default function App() {
     if (!card) return null;
     const current = card.cardmarket?.prices?.trendPrice || 0;
     const avg30 = card.cardmarket?.prices?.avg30 || current;
-    if (current > avg30 + 0.05) return <span className="text-emerald-400 font-bold" title="Preis steigt">▲</span>;
-    if (current < avg30 - 0.05) return <span className="text-rose-400 font-bold" title="Preis sinkt">▼</span>;
+    const threshold = Math.max(0.05, avg30 * 0.03); // 3% Schwelle statt starrer 5 Cent
+    if (current > avg30 + threshold) return <span className="text-emerald-400 font-bold" title="Preis steigt">▲</span>;
+    if (current < avg30 - threshold) return <span className="text-rose-400 font-bold" title="Preis sinkt">▼</span>;
     return <span className="text-slate-400 font-bold" title="Preis stabil">=</span>;
+  };
+
+  // Echte, von Cardmarket gelieferte Kennzahlen (1/7/30 Tage) statt Fantasiewerten
+  const getPriceHistoryBars = (card) => {
+    const prices = card?.cardmarket?.prices || {};
+    const points = [
+      { label: '30 T', value: prices.avg30 || 0 },
+      { label: '7 T', value: prices.avg7 || 0 },
+      { label: 'Heute', value: prices.trendPrice || prices.avg1 || 0 }
+    ];
+    const max = Math.max(...points.map(p => p.value), 0.01);
+    return points.map(p => ({ ...p, pct: Math.max(8, Math.round((p.value / max) * 100)) }));
   };
 
   const handleSearch = async (e) => {
@@ -100,19 +185,31 @@ export default function App() {
       const res = await fetch(`${API_URL}/api/cards?name=${encodeURIComponent(searchQuery)}`);
       if (!res.ok) throw new Error("API antwortet nicht");
       const data = await res.json();
-      
-      // Sicherheits-Check, falls die API Müll zurückgibt
+
       if (!Array.isArray(data)) {
-         setSearchResults([]);
-         setSearchError("Keine Karten gefunden oder Fehler bei der Abfrage.");
+        setSearchResults([]);
+        setSearchError("Keine Karten gefunden oder Fehler bei der Abfrage.");
+      } else if (data.length === 0) {
+        setSearchResults([]);
+        setSearchError("Keine Karten mit diesem Namen gefunden.");
       } else {
-         setSearchResults(data);
+        setSearchResults(data);
       }
     } catch (err) {
-      setSearchError('Verbindungsfehler zum Backend. Läuft Render noch?');
+      setSearchError('Verbindungsfehler zum Backend. Läuft der Server noch?');
     } finally {
       setLoading(false);
     }
+  };
+
+  const getSearchSelection = (cardId) =>
+    searchSelections[cardId] || { condition: 'Near Mint', language: 'Deutsch 🇩🇪' };
+
+  const updateSearchSelection = (cardId, patch) => {
+    setSearchSelections(prev => ({
+      ...prev,
+      [cardId]: { ...getSearchSelection(cardId), ...patch }
+    }));
   };
 
   const addToCollection = () => {
@@ -124,46 +221,48 @@ export default function App() {
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
       instanceId: Date.now()
     };
-    setCollection([...collection, newItem]);
+    setCollection(prev => [...prev, newItem]);
     setModalType(null);
+    setCustomPrice('');
   };
 
-  const addToWatchlist = () => {
-    if (!watchlist.some(item => item.id === selectedCard.id)) {
-      setWatchlist([...watchlist, selectedCard]);
-    }
-    setModalType(null);
+  // Nimmt die Karte direkt als Parameter entgegen, statt sich auf den
+  // (asynchronen) selectedCard-State zu verlassen — vermeidet, dass beim
+  // schnellen Klicken die falsche Karte zur Watchlist hinzugefügt wird.
+  const addToWatchlistCard = (card) => {
+    setWatchlist(prev => (prev.some(item => item.id === card.id) ? prev : [...prev, card]));
   };
 
   const stats = (() => {
     if (collection.length === 0) return { min: '0.00', median: '0.00', max: '0.00' };
-    let totalMedian = 0, totalMin = 0, totalMax = 0;
+    let total = 0, totalMin = 0, totalMax = 0;
     collection.forEach(item => {
       const price = parseFloat(item.userPrice) || 0;
-      totalMedian += price;
+      total += price;
       totalMin += price * 0.85;
       totalMax += price * 1.25;
     });
-    return { min: totalMin.toFixed(2), median: totalMedian.toFixed(2), max: totalMax.toFixed(2) };
+    return { min: totalMin.toFixed(2), median: total.toFixed(2), max: totalMax.toFixed(2) };
   })();
 
   const filteredCollection = (() => {
     let list = [...collection];
     if (filterLang !== 'Alle') list = list.filter(i => i.userLanguage === filterLang);
     if (filterSet !== 'Alle') list = list.filter(i => i.set?.name === filterSet);
-    
+
     list.sort((a, b) => {
-      // Sicheres Sortieren (Absturzschutz)
       const nameA = a.name || ''; const nameB = b.name || '';
       const setA = a.set?.name || ''; const setB = b.set?.name || '';
       const langA = a.userLanguage || ''; const langB = b.userLanguage || '';
-      
+
       if (sortBy === 'name-asc') return nameA.localeCompare(nameB);
       if (sortBy === 'name-desc') return nameB.localeCompare(nameA);
       if (sortBy === 'price-desc') return (parseFloat(b.userPrice) || 0) - (parseFloat(a.userPrice) || 0);
       if (sortBy === 'price-asc') return (parseFloat(a.userPrice) || 0) - (parseFloat(b.userPrice) || 0);
       if (sortBy === 'set-asc') return setA.localeCompare(setB);
+      if (sortBy === 'set-desc') return setB.localeCompare(setA);
       if (sortBy === 'lang-asc') return langA.localeCompare(langB);
+      if (sortBy === 'lang-desc') return langB.localeCompare(langA);
       return 0;
     });
     return list;
@@ -171,7 +270,9 @@ export default function App() {
 
   const availableSets = ['Alle', ...new Set(collection.map(item => item.set?.name).filter(Boolean))];
 
+  // --- LOGIN / SIGNUP SCREEN ---
   if (!isAuthenticated) {
+    const isRegister = authMode === 'register';
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans selection:bg-cyan-500 text-slate-100">
         <div className="bg-slate-900 border border-cyan-500/30 p-8 rounded-2xl w-full max-w-md shadow-2xl shadow-cyan-900/20">
@@ -179,30 +280,58 @@ export default function App() {
             <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-teal-400 tracking-wider mb-2">PokéTracker</h1>
             <p className="text-slate-400 text-sm">Verwalte deine Sammlung & Werte</p>
           </div>
-          <form onSubmit={handleLogin} className="space-y-4">
-            {authMode === 'register' && (
-              <div>
-                <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Benutzername</label>
-                <input type="text" required className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all" placeholder="Dein Name" />
-              </div>
-            )}
+
+          <h2 className="text-xl font-bold text-slate-200 mb-4">{isRegister ? 'Sign up' : 'Login'}</h2>
+
+          <form onSubmit={isRegister ? handleRegister : handleLogin} className="space-y-4">
             <div>
-              <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">E-Mail Adresse</label>
-              <input type="email" required className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all" placeholder="name@beispiel.de" />
+              <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Benutzername</label>
+              <input
+                type="text"
+                required
+                value={authUsername}
+                onChange={e => setAuthUsername(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all"
+                placeholder="Dein Benutzername"
+              />
             </div>
             <div>
               <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Passwort</label>
-              <input type="password" required className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all" placeholder="••••••••" />
+              <input
+                type="password"
+                required
+                value={authPassword}
+                onChange={e => setAuthPassword(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all"
+                placeholder="••••••••"
+              />
             </div>
+            {isRegister && (
+              <div>
+                <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Passwort bestätigen</label>
+                <input
+                  type="password"
+                  required
+                  value={authPasswordConfirm}
+                  onChange={e => setAuthPasswordConfirm(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all"
+                  placeholder="••••••••"
+                />
+              </div>
+            )}
+
+            {authError && <p className="text-rose-400 text-sm text-center">{authError}</p>}
+
             <button type="submit" className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-lg py-3 rounded-xl transition-all shadow-lg shadow-cyan-500/20 mt-4">
-              {authMode === 'login' ? 'Anmelden' : 'Account erstellen'}
+              {isRegister ? 'Account erstellen' : 'Anmelden'}
             </button>
           </form>
+
           <div className="mt-6 text-center text-sm text-slate-400">
-            {authMode === 'login' ? (
-              <p>Sign up: Noch keinen Account? <button onClick={() => setAuthMode('register')} className="text-cyan-400 font-bold hover:underline">Hier registrieren</button></p>
+            {isRegister ? (
+              <p>Bereits einen Account? <button onClick={() => switchAuthMode('login')} className="text-cyan-400 font-bold hover:underline">Hier anmelden</button></p>
             ) : (
-              <p>Bereits einen Account? <button onClick={() => setAuthMode('login')} className="text-cyan-400 font-bold hover:underline">Hier anmelden</button></p>
+              <p>Sign up: Noch keinen Account? <button onClick={() => switchAuthMode('register')} className="text-cyan-400 font-bold hover:underline">Hier registrieren</button></p>
             )}
           </div>
         </div>
@@ -214,14 +343,18 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-100 pb-24 font-sans selection:bg-cyan-500 selection:text-black">
       <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between shadow-md">
         <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ PokéTracker</span>
-        <button onClick={handleLogout} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 transition-colors">Abmelden</button>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-slate-400 hidden sm:inline">{currentUser}</span>
+          <button onClick={handleLogout} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 transition-colors">Abmelden</button>
+        </div>
       </header>
 
       <main className="max-w-4xl mx-auto p-4">
         {activeTab === 'profile' && (
           <div className="space-y-6 fade-in">
             <div className="bg-slate-900 border border-cyan-500/30 p-6 rounded-2xl shadow-xl shadow-cyan-900/10">
-              <h2 className="text-xl font-black text-white mb-6">Dein Collection Wert</h2>
+              <h2 className="text-xl font-black text-white mb-1">Willkommen zurück, {currentUser || 'Trainer'}</h2>
+              <p className="text-slate-400 text-sm mb-6">Wert deiner Collection</p>
               <div className="grid grid-cols-3 gap-3 text-center">
                 <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-center">
                   <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-widest">Minimalwert</p>
@@ -240,6 +373,10 @@ export default function App() {
                 <span className="text-slate-400">Anzahl Karten:</span>
                 <span className="font-bold text-cyan-400">{collection.length} Stück</span>
               </div>
+              <div className="mt-2 flex justify-between text-sm">
+                <span className="text-slate-400">Karten auf der Watchlist:</span>
+                <span className="font-bold text-cyan-400">{watchlist.length} Stück</span>
+              </div>
             </div>
           </div>
         )}
@@ -255,12 +392,14 @@ export default function App() {
                 {availableSets.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
               <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="bg-slate-950 text-xs border border-slate-800 rounded-lg p-2 text-slate-300 md:col-span-2">
-                <option value="name-asc">A-Z (Alphabetisch)</option>
-                <option value="name-desc">Z-A (Alphabetisch)</option>
-                <option value="price-desc">Preis (Highest first)</option>
-                <option value="price-asc">Preis (Lowest first)</option>
-                <option value="set-asc">Set (Alphabetisch)</option>
-                <option value="lang-asc">Ursprungsland</option>
+                <option value="name-asc">Name (A–Z)</option>
+                <option value="name-desc">Name (Z–A)</option>
+                <option value="price-desc">Preis (absteigend)</option>
+                <option value="price-asc">Preis (aufsteigend)</option>
+                <option value="set-asc">Set (A–Z)</option>
+                <option value="set-desc">Set (Z–A)</option>
+                <option value="lang-asc">Sprache (A–Z)</option>
+                <option value="lang-desc">Sprache (Z–A)</option>
               </select>
             </div>
             {filteredCollection.length === 0 ? (
@@ -294,8 +433,8 @@ export default function App() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {watchlist.map((card) => {
-                  const minPrice = calculatePrice(card, 'Poor', 'Chinesisch 🇨🇳'); 
-                  const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');  
+                  const minPrice = calculatePrice(card, 'Poor', CHEAPEST_LANG.name);
+                  const maxPrice = calculatePrice(card, 'Mint', PREMIUM_LANG.name);
                   return (
                     <div key={card.id} className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors">
                       <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small || ''} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
@@ -303,7 +442,7 @@ export default function App() {
                         <h4 className="font-bold text-slate-200">{card.name}</h4>
                         <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-xs text-cyan-400">Spanne: ~{minPrice}€ bis ~{maxPrice}€</p>
+                          <p className="text-xs text-cyan-400">Min {minPrice}€ – Max {maxPrice}€</p>
                           {getTrendIcon(card)}
                         </div>
                       </div>
@@ -322,25 +461,45 @@ export default function App() {
               <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kartennamen suchen..." className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
               <button type="submit" className="bg-cyan-500 text-slate-950 font-bold px-6 py-3 rounded-xl hover:bg-cyan-400 transition-colors">Suche</button>
             </form>
-            
+
             {loading && <div className="text-center text-cyan-400 py-10">Lade Karten...</div>}
             {searchError && <div className="text-center text-rose-400 py-10">{searchError}</div>}
-            
+
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
               {Array.isArray(searchResults) && searchResults.map((card) => {
-                const minPrice = calculatePrice(card, 'Poor', 'Koreanisch 🇰🇷');
-                const maxPrice = calculatePrice(card, 'Mint', 'Englisch 🇬🇧');
+                const sel = getSearchSelection(card.id);
+                const livePrice = calculatePrice(card, sel.condition, sel.language);
                 return (
                   <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
                     <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small || ''} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
+
+                    <div className="flex gap-1 mt-2">
+                      <select value={sel.condition} onChange={e => updateSearchSelection(card.id, { condition: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
+                        {CONDITIONS.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                      </select>
+                      <select value={sel.language} onChange={e => updateSearchSelection(card.id, { language: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
+                        {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name.split(' ')[0]}</option>)}
+                      </select>
+                    </div>
+
                     <div className="mt-1">
-                      <p className="text-cyan-400 font-bold text-xs">{minPrice} € – {maxPrice} €</p>
+                      <p className="text-cyan-400 font-bold text-xs">{livePrice} €</p>
                     </div>
                     <div className="flex gap-1 mt-3">
-                      <button onClick={() => { setSelectedCard(card); setModalType('collection'); }} className="flex-1 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold py-2 rounded-lg border border-cyan-500/30 transition-colors">➕ Coll</button>
-                      <button onClick={() => { setSelectedCard(card); setModalType('watchlist'); addToWatchlist(); }} className="bg-slate-800 text-slate-300 hover:text-cyan-400 text-xs px-3 rounded-lg border border-slate-700 transition-colors">★</button>
+                      <button
+                        onClick={() => {
+                          setSelectedCard(card);
+                          setCardCondition(sel.condition);
+                          setCardLanguage(sel.language);
+                          setModalType('collection');
+                        }}
+                        className="flex-1 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold py-2 rounded-lg border border-cyan-500/30 transition-colors"
+                      >
+                        ➕ Coll
+                      </button>
+                      <button onClick={() => addToWatchlistCard(card)} className="bg-slate-800 text-slate-300 hover:text-cyan-400 text-xs px-3 rounded-lg border border-slate-700 transition-colors">★</button>
                     </div>
                   </div>
                 );
@@ -374,11 +533,24 @@ export default function App() {
             {modalType === 'detail' && (
               <div className="space-y-4 mb-4 border-t border-slate-800 pt-4">
                 <h4 className="text-sm font-bold text-cyan-400 flex justify-between"><span>Preisverlauf</span><span>{getTrendIcon(selectedCard)}</span></h4>
-                <div className="flex items-end gap-2 h-24 bg-slate-950 p-3 rounded-xl border border-slate-800">
-                  <div className="flex-1 flex flex-col items-center justify-end gap-1"><div className="w-full bg-slate-700 rounded-t-sm" style={{height: '60%'}}></div><span className="text-[10px] text-slate-500">30 T</span></div>
-                  <div className="flex-1 flex flex-col items-center justify-end gap-1"><div className="w-full bg-cyan-800 rounded-t-sm" style={{height: '75%'}}></div><span className="text-[10px] text-slate-500">7 T</span></div>
-                  <div className="flex-1 flex flex-col items-center justify-end gap-1"><div className="w-full bg-cyan-400 rounded-t-sm relative" style={{height: '90%'}}></div><span className="text-[10px] text-cyan-400 font-bold">Heute</span></div>
-                </div>
+                {(() => {
+                  const bars = getPriceHistoryBars(selectedCard);
+                  const hasData = bars.some(b => b.value > 0);
+                  if (!hasData) {
+                    return <p className="text-xs text-slate-500 text-center py-6">Keine Preisdaten von Cardmarket verfügbar.</p>;
+                  }
+                  return (
+                    <div className="flex items-end gap-2 h-24 bg-slate-950 p-3 rounded-xl border border-slate-800">
+                      {bars.map((b, idx) => (
+                        <div key={b.label} className="flex-1 flex flex-col items-center justify-end gap-1">
+                          <span className="text-[10px] text-slate-400">{b.value.toFixed(2)}€</span>
+                          <div className={`w-full rounded-t-sm ${idx === bars.length - 1 ? 'bg-cyan-400' : idx === bars.length - 2 ? 'bg-cyan-800' : 'bg-slate-700'}`} style={{ height: `${b.pct}%` }}></div>
+                          <span className={`text-[10px] ${idx === bars.length - 1 ? 'text-cyan-400 font-bold' : 'text-slate-500'}`}>{b.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
@@ -391,7 +563,7 @@ export default function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400">Land der Sprache</label>
+                  <label className="text-xs text-slate-400">Sprache der Karte</label>
                   <select value={cardLanguage} onChange={e => setCardLanguage(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
                     {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
                   </select>
@@ -401,7 +573,7 @@ export default function App() {
                   <p className="text-xl font-black text-emerald-400">{calculatePrice(selectedCard, cardCondition, cardLanguage)} €</p>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400">Eigener Kaufpreis eintragen (Optional)</label>
+                  <label className="text-xs text-slate-400">Eigenen Preis eintragen (optional)</label>
                   <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
                 </div>
               </div>
