@@ -28,6 +28,23 @@ const CONDITIONS = [
 const CHEAPEST_LANG = LANGUAGES.reduce((a, b) => (a.factor < b.factor ? a : b));
 const PREMIUM_LANG = LANGUAGES.reduce((a, b) => (a.factor > b.factor ? a : b));
 
+// Zeigt das Kartenbild, oder einen dezenten Platzhalter statt eines
+// kaputten Bild-Icons, wenn TCGdex (noch) kein Bild für diese Karte hat.
+function CardImage({ src, alt, className, onClick }) {
+  if (!src) {
+    return (
+      <div
+        onClick={onClick}
+        className={`${className} bg-slate-800 border border-slate-700 flex flex-col items-center justify-center text-center p-2 aspect-[5/7] ${onClick ? 'cursor-pointer' : ''}`}
+      >
+        <span className="text-2xl mb-1">🃏</span>
+        <span className="text-[10px] text-slate-500 line-clamp-2">{alt || 'Kein Bild'}</span>
+      </div>
+    );
+  }
+  return <img onClick={onClick} src={src} alt={alt} className={className} />;
+}
+
 export default function App() {
   // --- AUTH ---
   const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('poketracker_auth') === 'true');
@@ -429,7 +446,7 @@ export default function App() {
                 {filteredCollection.map((item) => (
                   <div key={item.instanceId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 relative group shadow-lg">
                     <button onClick={() => setCollection(collection.filter(i => i.instanceId !== item.instanceId))} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
-                    <img onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.images?.small || ''} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                    <CardImage onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.images?.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{item.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{item.set?.name || 'Unbekanntes Set'} • {item.userLanguage.split(' ')[0]}</p>
                     <div className="flex justify-between items-center mt-2">
@@ -457,7 +474,7 @@ export default function App() {
                   const maxPrice = calculatePrice(card, 'Mint', PREMIUM_LANG.name);
                   return (
                     <div key={card.id} className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors">
-                      <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small || ''} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
+                      <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
                       <div className="flex-1">
                         <h4 className="font-bold text-slate-200">{card.name}</h4>
                         <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
@@ -492,7 +509,7 @@ export default function App() {
                 const livePrice = calculatePrice(card, sel.condition, sel.language);
                 return (
                   <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
-                    <img onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small || ''} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                    <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
 
@@ -546,7 +563,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
             <div className="flex gap-4 mb-4">
-              <img src={selectedCard.images?.small || ''} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
+              <CardImage src={selectedCard.images?.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
               <div>
                 <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}</h3>
                 <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
