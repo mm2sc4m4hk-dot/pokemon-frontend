@@ -40,6 +40,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('profile');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchSet, setSearchSet] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
@@ -182,21 +183,40 @@ export default function App() {
     setLoading(true);
     setSearchError('');
     try {
-      const res = await fetch(`${API_URL}/api/cards?name=${encodeURIComponent(searchQuery)}`);
-      if (!res.ok) throw new Error("API antwortet nicht");
+      const params = new URLSearchParams({ name: searchQuery });
+      if (searchSet.trim()) params.set('set', searchSet.trim());
+
+      // Timeout selbst setzen: Render-Gratisserver können nach Inaktivität
+      // bis zu ~50s zum Aufwachen brauchen, daher hier grosszügig 45s statt
+      // endlos zu warten oder sofort abzubrechen.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+      const res = await fetch(`${API_URL}/api/cards?${params.toString()}`, { signal: controller.signal });
+      clearTimeout(timeoutId);
+
+      if (res.status === 429) {
+        setSearchResults([]);
+        setSearchError('Zu viele Anfragen an die Kartendatenbank gerade (Rate Limit). Bitte kurz warten und erneut suchen.');
+        return;
+      }
+      if (!res.ok) throw new Error('API antwortet nicht');
       const data = await res.json();
 
       if (!Array.isArray(data)) {
         setSearchResults([]);
-        setSearchError("Keine Karten gefunden oder Fehler bei der Abfrage.");
+        setSearchError('Keine Karten gefunden oder Fehler bei der Abfrage.');
       } else if (data.length === 0) {
         setSearchResults([]);
-        setSearchError("Keine Karten mit diesem Namen gefunden.");
+        setSearchError('Keine Karten mit diesem Namen (und Set) gefunden.');
       } else {
         setSearchResults(data);
       }
     } catch (err) {
-      setSearchError('Verbindungsfehler zum Backend. Läuft der Server noch?');
+      if (err.name === 'AbortError') {
+        setSearchError('Der Server hat zu lange nicht geantwortet. Falls er gerade erst "aufwacht" (Render-Gratisplan schläft nach Inaktivität ein), bitte in ca. 1 Minute nochmal suchen.');
+      } else {
+        setSearchError('Verbindungsfehler zum Backend. Läuft der Server auf Render noch?');
+      }
     } finally {
       setLoading(false);
     }
@@ -457,8 +477,9 @@ export default function App() {
 
         {activeTab === 'search' && (
           <div className="space-y-6 fade-in">
-            <form onSubmit={handleSearch} className="flex gap-2">
+            <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
               <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kartennamen suchen..." className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
+              <input type="text" value={searchSet} onChange={e => setSearchSet(e.target.value)} placeholder="Set (optional, z.B. Base Set)" className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
               <button type="submit" className="bg-cyan-500 text-slate-950 font-bold px-6 py-3 rounded-xl hover:bg-cyan-400 transition-colors">Suche</button>
             </form>
 
@@ -484,8 +505,11 @@ export default function App() {
                       </select>
                     </div>
 
-                    <div className="mt-1">
-                      <p className="text-cyan-400 font-bold text-xs">{livePrice} €</p>
+                    <div className="mt-1 flex items-center justify-between gap-1">
+                      <p className="text-cyan-400 font-bold text-xs">~{livePrice} €</p>
+                      {card.cardmarket?.url && (
+                        <a href={card.cardmarket.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[10px] text-slate-500 hover:text-cyan-400 underline shrink-0">Cardmarket ↗</a>
+                      )}
                     </div>
                     <div className="flex gap-1 mt-3">
                       <button
@@ -527,6 +551,9 @@ export default function App() {
                 <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}</h3>
                 <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
                 <div className="mt-2 text-xs text-slate-300">Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span></div>
+                {selectedCard.cardmarket?.url && (
+                  <a href={selectedCard.cardmarket.url} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-400 hover:underline mt-1 inline-block">Original-Angebote auf Cardmarket ansehen ↗</a>
+                )}
               </div>
             </div>
 
@@ -569,8 +596,9 @@ export default function App() {
                   </select>
                 </div>
                 <div className="bg-slate-950 border border-cyan-500/30 p-3 rounded-lg text-center shadow-inner">
-                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">Berechneter Marktwert</p>
-                  <p className="text-xl font-black text-emerald-400">{calculatePrice(selectedCard, cardCondition, cardLanguage)} €</p>
+                  <p className="text-[10px] text-slate-400 uppercase tracking-wider">Geschätzter Richtwert</p>
+                  <p className="text-xl font-black text-emerald-400">~{calculatePrice(selectedCard, cardCondition, cardLanguage)} €</p>
+                  <p className="text-[10px] text-slate-500 mt-1">Hochgerechnet aus dem Cardmarket-Trendpreis (Near Mint) × Zustand/Sprache. Kein Live-Preis von Cardmarket selbst.</p>
                 </div>
                 <div>
                   <label className="text-xs text-slate-400">Eigenen Preis eintragen (optional)</label>
