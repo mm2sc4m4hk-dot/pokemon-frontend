@@ -746,7 +746,7 @@ export default function App() {
                       )}
                     </div>
 
-                    <div className="mt-1 flex items-center justify-between gap-1">
+                    <div className="mt-auto pt-2 flex items-center justify-between gap-1">
                       <p className="text-cyan-400 font-bold text-xs">~{livePrice} €</p>
                       {card.cardmarket?.url && (
                         <a href={card.cardmarket.url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-[10px] text-slate-500 hover:text-cyan-400 underline shrink-0">Cardmarket ↗</a>
