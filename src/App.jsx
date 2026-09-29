@@ -388,7 +388,8 @@ export default function App() {
       userLanguage: cardLanguage,
       userVariant: cardVariant,
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
-      customImage: customImage || null
+      customImage: customImage || null,
+      addedAt: Date.now()
     };
     delete newItem.docId;
     delete newItem.instanceId;
@@ -418,7 +419,7 @@ export default function App() {
     if (!auth.currentUser) return;
     try {
       // card.id als Dokument-ID -> verhindert automatisch Duplikate.
-      await setDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', card.id), card);
+      await setDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', card.id), { ...card, addedAt: Date.now() });
     } catch (err) {
       alert('Zur Watchlist hinzufügen fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
     }
@@ -432,6 +433,10 @@ export default function App() {
       alert('Entfernen fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
     }
   };
+
+  const formatAdded = (ts) => ts
+    ? new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : null;
 
   const stats = (() => {
     if (collection.length === 0) return { min: '0.00', median: '0.00', max: '0.00' };
@@ -463,6 +468,9 @@ export default function App() {
       if (sortBy === 'set-desc') return setB.localeCompare(setA);
       if (sortBy === 'lang-asc') return langA.localeCompare(langB);
       if (sortBy === 'lang-desc') return langB.localeCompare(langA);
+      // Ältere Karten ohne Zeitstempel zählen als "ganz alt" (addedAt = 0).
+      if (sortBy === 'added-desc') return (b.addedAt || 0) - (a.addedAt || 0);
+      if (sortBy === 'added-asc') return (a.addedAt || 0) - (b.addedAt || 0);
       return 0;
     });
     return list;
@@ -610,6 +618,8 @@ export default function App() {
                 <option value="set-desc">Set (Z–A)</option>
                 <option value="lang-asc">Sprache (A–Z)</option>
                 <option value="lang-desc">Sprache (Z–A)</option>
+                <option value="added-desc">Zuletzt hinzugefügt</option>
+                <option value="added-asc">Zuerst hinzugefügt</option>
               </select>
             </div>
             {filteredCollection.length === 0 ? (
@@ -632,6 +642,7 @@ export default function App() {
                         {getTrendIcon(item, item.userVariant)}
                       </div>
                     </div>
+                    {item.addedAt && <p className="text-[10px] text-slate-500 mt-1">Hinzugefügt: {formatAdded(item.addedAt)}</p>}
                   </div>
                 ))}
               </div>
@@ -645,7 +656,7 @@ export default function App() {
               <div className="text-center py-20 text-slate-500">Deine Watchlist ist leer.</div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {watchlist.map((card) => {
+                {[...watchlist].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).map((card) => {
                   const minPrice = calculatePrice(card, 'Poor', CHEAPEST_LANG.name);
                   const maxPrice = calculatePrice(card, 'Mint', PREMIUM_LANG.name);
                   return (
@@ -654,6 +665,7 @@ export default function App() {
                       <div className="flex-1">
                         <h4 className="font-bold text-slate-200">{card.name}</h4>
                         <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
+                        {card.addedAt && <p className="text-[10px] text-slate-500">Hinzugefügt: {formatAdded(card.addedAt)}</p>}
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-xs text-cyan-400">Min {minPrice}€ – Max {maxPrice}€</p>
                           {getTrendIcon(card)}
