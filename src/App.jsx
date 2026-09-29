@@ -1,6 +1,23 @@
-import React, { useState, useEffect } from 'react';
 
-// Verbindung zum Backend
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut,
+  updateProfile
+} from 'firebase/auth';
+import {
+  collection as fsCollection,
+  doc,
+  addDoc,
+  setDoc,
+  deleteDoc,
+  onSnapshot
+} from 'firebase/firestore';
+import { auth, db } from './firebase';
+
+// Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
 const LANGUAGES = [
@@ -24,9 +41,28 @@ const CONDITIONS = [
   { name: 'Poor', factor: 0.15, label: 'Poor (Beschädigt, -85%)' }
 ];
 
-// Sehr günstigste/teuerste Kombination, um Preisspannen (min/max) zu zeigen
 const CHEAPEST_LANG = LANGUAGES.reduce((a, b) => (a.factor < b.factor ? a : b));
 const PREMIUM_LANG = LANGUAGES.reduce((a, b) => (a.factor > b.factor ? a : b));
+
+// Firebase Auth erwartet eine E-Mail-Adresse. Die App fragt bewusst nur
+// nach einem Benutzernamen (passend zum ursprünglichen Design) -> daraus
+// wird intern eine eindeutige, technische Pseudo-E-Mail gebaut. Der Nutzer
+// bekommt davon nichts mit, meldet sich immer nur mit Benutzername an.
+const usernameToEmail = (username) => `${username.trim().toLowerCase()}@poketracker.local`;
+
+// Übersetzt Firebase-Fehlercodes in verständliche deutsche Meldungen.
+const authErrorMessage = (code) => {
+  switch (code) {
+    case 'auth/email-already-in-use': return 'Dieser Benutzername ist bereits vergeben.';
+    case 'auth/weak-password': return 'Passwort zu kurz (mindestens 6 Zeichen).';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password': return 'Falsches Passwort.';
+    case 'auth/user-not-found': return 'Diesen Benutzer gibt es noch nicht. Bitte zuerst registrieren.';
+    case 'auth/too-many-requests': return 'Zu viele Versuche. Bitte kurz warten und erneut versuchen.';
+    case 'auth/network-request-failed': return 'Keine Verbindung zu Firebase. Internetverbindung prüfen.';
+    default: return 'Etwas ist schiefgelaufen. Bitte erneut versuchen.';
+  }
+};
 
 // Zeigt das Kartenbild, oder einen dezenten Platzhalter statt eines
 // kaputten Bild-Icons, wenn TCGdex (noch) kein Bild für diese Karte hat.
@@ -45,15 +81,42 @@ function CardImage({ src, alt, className, onClick }) {
   return <img onClick={onClick} src={src} alt={alt} className={className} />;
 }
 
+// Verkleinert ein hochgeladenes Foto client-seitig (max. Breite 500px,
+// JPEG q=0.7), bevor es als Base64 in Firestore landet — Firestore-Dokumente
+// dürfen max. ~1MB groß sein, ein rohes Handyfoto würde das sprengen.
+function resizeImageFile(file, maxWidth = 500, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = reject;
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function App() {
-  // --- AUTH ---
-  const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem('poketracker_auth') === 'true');
-  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem('poketracker_current_user') || '');
+  // --- AUTH (Firebase) ---
+  const [authLoading, setAuthLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [currentUser, setCurrentUser] = useState('');
   const [authMode, setAuthMode] = useState('login');
   const [authUsername, setAuthUsername] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
   const [authError, setAuthError] = useState('');
+  const [authBusy, setAuthBusy] = useState(false);
 
   const [activeTab, setActiveTab] = useState('profile');
   const [searchQuery, setSearchQuery] = useState('');
@@ -61,69 +124,85 @@ export default function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState('');
-  // pro Suchergebnis gewählte Condition/Sprache, um Preis live zu berechnen
   const [searchSelections, setSearchSelections] = useState({});
 
-  const [collection, setCollection] = useState(() => {
-    const saved = localStorage.getItem('poketracker_collection');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [watchlist, setWatchlist] = useState(() => {
-    const saved = localStorage.getItem('poketracker_watchlist');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Collection & Watchlist kommen jetzt live aus Firestore (siehe useEffect
+  // weiter unten), nicht mehr aus localStorage.
+  const [collection, setCollection] = useState([]);
+  const [watchlist, setWatchlist] = useState([]);
 
   const [selectedCard, setSelectedCard] = useState(null);
   const [modalType, setModalType] = useState(null);
   const [cardCondition, setCardCondition] = useState('Near Mint');
   const [cardLanguage, setCardLanguage] = useState('Deutsch 🇩🇪');
   const [customPrice, setCustomPrice] = useState('');
+  const [customImage, setCustomImage] = useState('');
 
   const [filterLang, setFilterLang] = useState('Alle');
   const [filterSet, setFilterSet] = useState('Alle');
   const [sortBy, setSortBy] = useState('name-asc');
 
+  const unsubscribers = useRef([]);
+
+  // Firebase-Login-Status beobachten. Läuft einmal beim Start und danach
+  // bei jedem Login/Logout -> hier werden auch die Firestore-Live-Listener
+  // für Collection & Watchlist auf- bzw. abgebaut.
   useEffect(() => {
-    if (isAuthenticated) {
-      localStorage.setItem('poketracker_collection', JSON.stringify(collection));
-      localStorage.setItem('poketracker_watchlist', JSON.stringify(watchlist));
-    }
-  }, [collection, watchlist, isAuthenticated]);
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      // alte Firestore-Listener immer zuerst abmelden
+      unsubscribers.current.forEach((u) => u());
+      unsubscribers.current = [];
 
-  // --- AUTH LOGIK ---
-  // Hinweis: Ohne eigenes Backend-Auth-System werden Zugangsdaten nur lokal
-  // im Browser (localStorage) gespeichert. Für echten Mehrgeräte-Zugriff
-  // bräuchte man später eine echte Nutzer-Datenbank im server.js.
-  const getStoredUsers = () => {
-    const raw = localStorage.getItem('poketracker_users');
-    return raw ? JSON.parse(raw) : {};
-  };
+      if (user) {
+        setIsAuthenticated(true);
+        setCurrentUser(user.displayName || user.email?.split('@')[0] || 'Trainer');
 
-  const handleLogin = (e) => {
+        const collRef = fsCollection(db, 'users', user.uid, 'collection');
+        const unsubColl = onSnapshot(collRef, (snap) => {
+          setCollection(snap.docs.map((d) => ({ ...d.data(), docId: d.id, instanceId: d.id })));
+        });
+
+        const watchRef = fsCollection(db, 'users', user.uid, 'watchlist');
+        const unsubWatch = onSnapshot(watchRef, (snap) => {
+          setWatchlist(snap.docs.map((d) => d.data()));
+        });
+
+        unsubscribers.current.push(unsubColl, unsubWatch);
+      } else {
+        setIsAuthenticated(false);
+        setCurrentUser('');
+        setCollection([]);
+        setWatchlist([]);
+      }
+      setAuthLoading(false);
+    });
+
+    return () => {
+      unsubAuth();
+      unsubscribers.current.forEach((u) => u());
+    };
+  }, []);
+
+  const handleLogin = async (e) => {
     e.preventDefault();
     setAuthError('');
-    const users = getStoredUsers();
     const uname = authUsername.trim();
     if (!uname || !authPassword) {
       setAuthError('Bitte Benutzername und Passwort eingeben.');
       return;
     }
-    if (!users[uname]) {
-      setAuthError('Diesen Benutzer gibt es noch nicht. Bitte zuerst registrieren.');
-      return;
+    setAuthBusy(true);
+    try {
+      await signInWithEmailAndPassword(auth, usernameToEmail(uname), authPassword);
+      setActiveTab('profile');
+    } catch (err) {
+      setAuthError(authErrorMessage(err.code));
+    } finally {
+      setAuthBusy(false);
     }
-    if (users[uname] !== authPassword) {
-      setAuthError('Falsches Passwort.');
-      return;
-    }
-    setIsAuthenticated(true);
-    setCurrentUser(uname);
-    localStorage.setItem('poketracker_auth', 'true');
-    localStorage.setItem('poketracker_current_user', uname);
-    setActiveTab('profile');
   };
 
-  const handleRegister = (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     setAuthError('');
     const uname = authUsername.trim();
@@ -135,25 +214,20 @@ export default function App() {
       setAuthError('Die Passwörter stimmen nicht überein.');
       return;
     }
-    const users = getStoredUsers();
-    if (users[uname]) {
-      setAuthError('Dieser Benutzername ist bereits vergeben.');
-      return;
+    setAuthBusy(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(uname), authPassword);
+      await updateProfile(cred.user, { displayName: uname });
+      setActiveTab('profile');
+    } catch (err) {
+      setAuthError(authErrorMessage(err.code));
+    } finally {
+      setAuthBusy(false);
     }
-    users[uname] = authPassword;
-    localStorage.setItem('poketracker_users', JSON.stringify(users));
-    setIsAuthenticated(true);
-    setCurrentUser(uname);
-    localStorage.setItem('poketracker_auth', 'true');
-    localStorage.setItem('poketracker_current_user', uname);
-    setActiveTab('profile');
   };
 
   const handleLogout = () => {
-    setIsAuthenticated(false);
-    setCurrentUser('');
-    localStorage.removeItem('poketracker_auth');
-    localStorage.removeItem('poketracker_current_user');
+    signOut(auth);
   };
 
   const switchAuthMode = (mode) => {
@@ -176,13 +250,12 @@ export default function App() {
     if (!card) return null;
     const current = card.cardmarket?.prices?.trendPrice || 0;
     const avg30 = card.cardmarket?.prices?.avg30 || current;
-    const threshold = Math.max(0.05, avg30 * 0.03); // 3% Schwelle statt starrer 5 Cent
+    const threshold = Math.max(0.05, avg30 * 0.03);
     if (current > avg30 + threshold) return <span className="text-emerald-400 font-bold" title="Preis steigt">▲</span>;
     if (current < avg30 - threshold) return <span className="text-rose-400 font-bold" title="Preis sinkt">▼</span>;
     return <span className="text-slate-400 font-bold" title="Preis stabil">=</span>;
   };
 
-  // Echte, von Cardmarket gelieferte Kennzahlen (1/7/30 Tage) statt Fantasiewerten
   const getPriceHistoryBars = (card) => {
     const prices = card?.cardmarket?.prices || {};
     const points = [
@@ -203,9 +276,6 @@ export default function App() {
       const params = new URLSearchParams({ name: searchQuery });
       if (searchSet.trim()) params.set('set', searchSet.trim());
 
-      // Timeout selbst setzen: Render-Gratisserver können nach Inaktivität
-      // bis zu ~50s zum Aufwachen brauchen, daher hier grosszügig 45s statt
-      // endlos zu warten oder sofort abzubrechen.
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 45000);
       const res = await fetch(`${API_URL}/api/cards?${params.toString()}`, { signal: controller.signal });
@@ -249,25 +319,67 @@ export default function App() {
     }));
   };
 
-  const addToCollection = () => {
+  const handleImageUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const resized = await resizeImageFile(file);
+      setCustomImage(resized);
+    } catch (err) {
+      alert('Foto konnte nicht gelesen werden. Bitte anderes Bild versuchen.');
+    }
+  };
+
+  const addToCollection = async () => {
+    if (!auth.currentUser) return;
     const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage);
     const newItem = {
       ...selectedCard,
       userCondition: cardCondition,
       userLanguage: cardLanguage,
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
-      instanceId: Date.now()
+      customImage: customImage || null
     };
-    setCollection(prev => [...prev, newItem]);
-    setModalType(null);
-    setCustomPrice('');
+    delete newItem.docId;
+    delete newItem.instanceId;
+    try {
+      await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
+      // kein manuelles setCollection nötig — der Firestore-Live-Listener
+      // (onSnapshot) aktualisiert die Ansicht automatisch.
+      setModalType(null);
+      setCustomPrice('');
+      setCustomImage('');
+    } catch (err) {
+      alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
   };
 
-  // Nimmt die Karte direkt als Parameter entgegen, statt sich auf den
-  // (asynchronen) selectedCard-State zu verlassen — vermeidet, dass beim
-  // schnellen Klicken die falsche Karte zur Watchlist hinzugefügt wird.
-  const addToWatchlistCard = (card) => {
-    setWatchlist(prev => (prev.some(item => item.id === card.id) ? prev : [...prev, card]));
+  const removeFromCollection = async (docId) => {
+    if (!auth.currentUser) return;
+    try {
+      await deleteDoc(doc(db, 'users', auth.currentUser.uid, 'collection', docId));
+    } catch (err) {
+      alert('Löschen fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
+  };
+
+  const addToWatchlistCard = async (card) => {
+    if (!auth.currentUser) return;
+    try {
+      // card.id als Dokument-ID -> verhindert automatisch Duplikate.
+      await setDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', card.id), card);
+    } catch (err) {
+      alert('Zur Watchlist hinzufügen fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
+  };
+
+  const removeFromWatchlist = async (cardId) => {
+    if (!auth.currentUser) return;
+    try {
+      await deleteDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', cardId));
+    } catch (err) {
+      alert('Entfernen fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
   };
 
   const stats = (() => {
@@ -307,7 +419,17 @@ export default function App() {
 
   const availableSets = ['Alle', ...new Set(collection.map(item => item.set?.name).filter(Boolean))];
 
-  // --- LOGIN / SIGNUP SCREEN ---
+  // Beim allerersten Laden (Firebase prüft noch, ob eine Sitzung existiert)
+  // lieber einen kurzen Ladeschirm zeigen als kurz den Login-Screen aufblitzen
+  // zu lassen.
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-sm">
+        Lädt...
+      </div>
+    );
+  }
+
   if (!isAuthenticated) {
     const isRegister = authMode === 'register';
     return (
@@ -359,8 +481,8 @@ export default function App() {
 
             {authError && <p className="text-rose-400 text-sm text-center">{authError}</p>}
 
-            <button type="submit" className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-lg py-3 rounded-xl transition-all shadow-lg shadow-cyan-500/20 mt-4">
-              {isRegister ? 'Account erstellen' : 'Anmelden'}
+            <button type="submit" disabled={authBusy} className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-black text-lg py-3 rounded-xl transition-all shadow-lg shadow-cyan-500/20 mt-4">
+              {authBusy ? 'Bitte warten...' : isRegister ? 'Account erstellen' : 'Anmelden'}
             </button>
           </form>
 
@@ -444,9 +566,9 @@ export default function App() {
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                 {filteredCollection.map((item) => (
-                  <div key={item.instanceId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 relative group shadow-lg">
-                    <button onClick={() => setCollection(collection.filter(i => i.instanceId !== item.instanceId))} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
-                    <CardImage onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.images?.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
+                  <div key={item.docId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 relative group shadow-lg">
+                    <button onClick={() => removeFromCollection(item.docId)} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
+                    <CardImage onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.customImage || item.images?.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{item.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{item.set?.name || 'Unbekanntes Set'} • {item.userLanguage.split(' ')[0]}</p>
                     <div className="flex justify-between items-center mt-2">
@@ -483,7 +605,7 @@ export default function App() {
                           {getTrendIcon(card)}
                         </div>
                       </div>
-                      <button onClick={() => setWatchlist(watchlist.filter(i => i.id !== card.id))} className="text-slate-500 hover:text-rose-400 px-2 py-2 text-xl font-bold">✕</button>
+                      <button onClick={() => removeFromWatchlist(card.id)} className="text-slate-500 hover:text-rose-400 px-2 py-2 text-xl font-bold">✕</button>
                     </div>
                   );
                 })}
@@ -563,7 +685,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
             <div className="flex gap-4 mb-4">
-              <CardImage src={selectedCard.images?.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
+              <CardImage src={selectedCard.customImage || selectedCard.images?.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
               <div>
                 <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}</h3>
                 <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
@@ -621,11 +743,21 @@ export default function App() {
                   <label className="text-xs text-slate-400">Eigenen Preis eintragen (optional)</label>
                   <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
                 </div>
+                <div>
+                  <label className="text-xs text-slate-400">Eigenes Foto der Karte (optional, z.B. wenn kein Bild vorhanden ist)</label>
+                  <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs text-slate-400 mt-1 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:text-cyan-400 file:text-xs file:font-bold hover:file:bg-cyan-500/30" />
+                  {customImage && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <img src={customImage} alt="Eigenes Foto" className="w-12 h-16 object-cover rounded border border-slate-700" />
+                      <button onClick={() => setCustomImage('')} className="text-xs text-rose-400 hover:underline">Entfernen</button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
             <div className="flex gap-2 pt-2">
-              <button onClick={() => { setModalType(null); setCustomPrice(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              <button onClick={() => { setModalType(null); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
               {modalType === 'collection' && <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>}
             </div>
           </div>
