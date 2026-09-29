@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import {
   createUserWithEmailAndPassword,
@@ -42,6 +41,30 @@ const CONDITIONS = [
 ];
 
 const CHEAPEST_LANG = LANGUAGES.reduce((a, b) => (a.factor < b.factor ? a : b));
+
+// Druckvarianten einer Karte. "holo" (bool auf der Variante) legt fest, ob
+// die Holo-Cardmarket-Preise (trendPriceHolo etc.) statt der normalen
+// verwendet werden — Cardmarket führt nur "non-foil" vs. "foil", nicht pro
+// Variante einzeln, daher teilen sich Reverse Holo und Holo dieselbe
+// Holo-Preisreihe. 1st Edition hat bei Cardmarket/TCGdex keine eigene
+// EUR-Preisreihe, zählt hier daher wie "Normal".
+const VARIANTS = [
+  { key: 'normal', label: 'Normal', holo: false },
+  { key: 'reverse', label: 'Reverse Holo', holo: true },
+  { key: 'holo', label: 'Holo', holo: true },
+  { key: 'firstEdition', label: '1st Edition', holo: false }
+];
+
+// Liefert nur die Varianten, die laut TCGdex für diese Karte wirklich
+// existieren (card.variants, z.B. { normal: true, reverse: true, ... }).
+// Ohne diese Info (oder wenn nichts als "true" markiert ist) wird
+// zumindest "Normal" als Fallback angeboten, damit die Auswahl nie leer ist.
+const getAvailableVariants = (card) => {
+  const flags = card?.variants;
+  if (!flags) return [VARIANTS[0]];
+  const available = VARIANTS.filter((v) => flags[v.key]);
+  return available.length > 0 ? available : [VARIANTS[0]];
+};
 const PREMIUM_LANG = LANGUAGES.reduce((a, b) => (a.factor > b.factor ? a : b));
 
 // Firebase Auth erwartet eine E-Mail-Adresse. Die App fragt bewusst nur
@@ -58,6 +81,8 @@ const authErrorMessage = (code) => {
     case 'auth/invalid-credential':
     case 'auth/wrong-password': return 'Falsches Passwort.';
     case 'auth/user-not-found': return 'Diesen Benutzer gibt es noch nicht. Bitte zuerst registrieren.';
+    case 'auth/configuration-not-found':
+    case 'auth/operation-not-allowed': return 'E-Mail/Passwort-Anmeldung ist in Firebase noch nicht aktiviert (Authentication → Sign-in method).';
     case 'auth/too-many-requests': return 'Zu viele Versuche. Bitte kurz warten und erneut versuchen.';
     case 'auth/network-request-failed': return 'Keine Verbindung zu Firebase. Internetverbindung prüfen.';
     default: return 'Etwas ist schiefgelaufen. Bitte erneut versuchen.';
@@ -135,6 +160,8 @@ export default function App() {
   const [modalType, setModalType] = useState(null);
   const [cardCondition, setCardCondition] = useState('Near Mint');
   const [cardLanguage, setCardLanguage] = useState('Deutsch 🇩🇪');
+  const [cardVariant, setCardVariant] = useState('normal');
+  const [detailVariant, setDetailVariant] = useState('normal');
   const [customPrice, setCustomPrice] = useState('');
   const [customImage, setCustomImage] = useState('');
 
@@ -143,6 +170,13 @@ export default function App() {
   const [sortBy, setSortBy] = useState('name-asc');
 
   const unsubscribers = useRef([]);
+
+  // Beim Öffnen einer anderen Karte im Modal die Varianten-Ansicht des
+  // Preisverlaufs zurücksetzen: eigene Collection-Karten zeigen direkt ihre
+  // gespeicherte Variante, alles andere startet bei "Normal".
+  useEffect(() => {
+    setDetailVariant(selectedCard?.userVariant || 'normal');
+  }, [selectedCard]);
 
   // Firebase-Login-Status beobachten. Läuft einmal beim Start und danach
   // bei jedem Login/Logout -> hier werden auch die Firestore-Live-Listener
@@ -196,6 +230,7 @@ export default function App() {
       await signInWithEmailAndPassword(auth, usernameToEmail(uname), authPassword);
       setActiveTab('profile');
     } catch (err) {
+      console.error('Firebase Auth Fehler:', err.code, err.message);
       setAuthError(authErrorMessage(err.code));
     } finally {
       setAuthBusy(false);
@@ -220,6 +255,7 @@ export default function App() {
       await updateProfile(cred.user, { displayName: uname });
       setActiveTab('profile');
     } catch (err) {
+      console.error('Firebase Auth Fehler:', err.code, err.message);
       setAuthError(authErrorMessage(err.code));
     } finally {
       setAuthBusy(false);
@@ -238,31 +274,44 @@ export default function App() {
   };
 
   // --- SICHERE PREIS-LOGIK ---
-  const calculatePrice = (card, conditionName, langName) => {
+  const calculatePrice = (card, conditionName, langName, variantKey = 'normal') => {
     if (!card) return "0.00";
-    const basePrice = card.cardmarket?.prices?.trendPrice || card.cardmarket?.prices?.averageSellPrice || 0;
+    const isHolo = VARIANTS.find(v => v.key === variantKey)?.holo;
+    const prices = card.cardmarket?.prices || {};
+    const basePrice = isHolo
+      ? (prices.trendPriceHolo || prices.avg1Holo || 0)
+      : (prices.trendPrice || prices.averageSellPrice || 0);
     const condFactor = CONDITIONS.find(c => c.name === conditionName)?.factor || 1.0;
     const langFactor = LANGUAGES.find(l => l.name === langName)?.factor || 1.0;
     return (basePrice * condFactor * langFactor).toFixed(2);
   };
 
-  const getTrendIcon = (card) => {
+  const getTrendIcon = (card, variantKey = 'normal') => {
     if (!card) return null;
-    const current = card.cardmarket?.prices?.trendPrice || 0;
-    const avg30 = card.cardmarket?.prices?.avg30 || current;
+    const isHolo = VARIANTS.find(v => v.key === variantKey)?.holo;
+    const prices = card.cardmarket?.prices || {};
+    const current = (isHolo ? prices.trendPriceHolo : prices.trendPrice) || 0;
+    const avg30 = (isHolo ? prices.avg30Holo : prices.avg30) || current;
     const threshold = Math.max(0.05, avg30 * 0.03);
     if (current > avg30 + threshold) return <span className="text-emerald-400 font-bold" title="Preis steigt">▲</span>;
     if (current < avg30 - threshold) return <span className="text-rose-400 font-bold" title="Preis sinkt">▼</span>;
     return <span className="text-slate-400 font-bold" title="Preis stabil">=</span>;
   };
 
-  const getPriceHistoryBars = (card) => {
+  const getPriceHistoryBars = (card, variantKey = 'normal') => {
+    const isHolo = VARIANTS.find(v => v.key === variantKey)?.holo;
     const prices = card?.cardmarket?.prices || {};
-    const points = [
-      { label: '30 T', value: prices.avg30 || 0 },
-      { label: '7 T', value: prices.avg7 || 0 },
-      { label: 'Heute', value: prices.trendPrice || prices.avg1 || 0 }
-    ];
+    const points = isHolo
+      ? [
+          { label: '30 T', value: prices.avg30Holo || 0 },
+          { label: '7 T', value: prices.avg7Holo || 0 },
+          { label: 'Heute', value: prices.trendPriceHolo || prices.avg1Holo || 0 }
+        ]
+      : [
+          { label: '30 T', value: prices.avg30 || 0 },
+          { label: '7 T', value: prices.avg7 || 0 },
+          { label: 'Heute', value: prices.trendPrice || prices.avg1 || 0 }
+        ];
     const max = Math.max(...points.map(p => p.value), 0.01);
     return points.map(p => ({ ...p, pct: Math.max(8, Math.round((p.value / max) * 100)) }));
   };
@@ -310,7 +359,7 @@ export default function App() {
   };
 
   const getSearchSelection = (cardId) =>
-    searchSelections[cardId] || { condition: 'Near Mint', language: 'Deutsch 🇩🇪' };
+    searchSelections[cardId] || { condition: 'Near Mint', language: 'Deutsch 🇩🇪', variant: 'normal' };
 
   const updateSearchSelection = (cardId, patch) => {
     setSearchSelections(prev => ({
@@ -332,11 +381,12 @@ export default function App() {
 
   const addToCollection = async () => {
     if (!auth.currentUser) return;
-    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage);
+    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant);
     const newItem = {
       ...selectedCard,
       userCondition: cardCondition,
       userLanguage: cardLanguage,
+      userVariant: cardVariant,
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
       customImage: customImage || null
     };
@@ -349,6 +399,7 @@ export default function App() {
       setModalType(null);
       setCustomPrice('');
       setCustomImage('');
+      setCardVariant('normal');
     } catch (err) {
       alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
     }
@@ -575,7 +626,10 @@ export default function App() {
                       <span className="text-cyan-400 font-bold">{item.userPrice} €</span>
                       <div className="flex items-center gap-1">
                         <span className="text-[10px] bg-slate-800 px-1 rounded text-slate-300">{item.userCondition}</span>
-                        {getTrendIcon(item)}
+                        {item.userVariant && item.userVariant !== 'normal' && (
+                          <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-1 rounded">{VARIANTS.find(v => v.key === item.userVariant)?.label || item.userVariant}</span>
+                        )}
+                        {getTrendIcon(item, item.userVariant)}
                       </div>
                     </div>
                   </div>
@@ -628,20 +682,26 @@ export default function App() {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
               {Array.isArray(searchResults) && searchResults.map((card) => {
                 const sel = getSearchSelection(card.id);
-                const livePrice = calculatePrice(card, sel.condition, sel.language);
+                const livePrice = calculatePrice(card, sel.condition, sel.language, sel.variant);
+                const variantOptions = getAvailableVariants(card);
                 return (
                   <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
                     <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}</h3>
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
 
-                    <div className="flex gap-1 mt-2">
+                    <div className="flex flex-wrap gap-1 mt-2">
                       <select value={sel.condition} onChange={e => updateSearchSelection(card.id, { condition: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
                         {CONDITIONS.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
                       </select>
                       <select value={sel.language} onChange={e => updateSearchSelection(card.id, { language: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
                         {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name.split(' ')[0]}</option>)}
                       </select>
+                      {variantOptions.length > 1 && (
+                        <select value={sel.variant} onChange={e => updateSearchSelection(card.id, { variant: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
+                          {variantOptions.map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                        </select>
+                      )}
                     </div>
 
                     <div className="mt-1 flex items-center justify-between gap-1">
@@ -656,6 +716,7 @@ export default function App() {
                           setSelectedCard(card);
                           setCardCondition(sel.condition);
                           setCardLanguage(sel.language);
+                          setCardVariant(sel.variant);
                           setModalType('collection');
                         }}
                         className="flex-1 bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold py-2 rounded-lg border border-cyan-500/30 transition-colors"
@@ -698,9 +759,25 @@ export default function App() {
 
             {modalType === 'detail' && (
               <div className="space-y-4 mb-4 border-t border-slate-800 pt-4">
-                <h4 className="text-sm font-bold text-cyan-400 flex justify-between"><span>Preisverlauf</span><span>{getTrendIcon(selectedCard)}</span></h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-bold text-cyan-400">Preisverlauf</h4>
+                  {getTrendIcon(selectedCard, detailVariant)}
+                </div>
+                {getAvailableVariants(selectedCard).length > 1 && (
+                  <div className="flex gap-1">
+                    {getAvailableVariants(selectedCard).map(v => (
+                      <button
+                        key={v.key}
+                        onClick={() => setDetailVariant(v.key)}
+                        className={`flex-1 text-[10px] font-bold py-1.5 rounded-lg border transition-colors ${detailVariant === v.key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:border-slate-700'}`}
+                      >
+                        {v.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {(() => {
-                  const bars = getPriceHistoryBars(selectedCard);
+                  const bars = getPriceHistoryBars(selectedCard, detailVariant);
                   const hasData = bars.some(b => b.value > 0);
                   if (!hasData) {
                     return <p className="text-xs text-slate-500 text-center py-6">Keine Preisdaten von Cardmarket verfügbar.</p>;
@@ -734,10 +811,19 @@ export default function App() {
                     {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
                   </select>
                 </div>
+                <div>
+                  <label className="text-xs text-slate-400">Variante</label>
+                  <select value={cardVariant} onChange={e => setCardVariant(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                    {getAvailableVariants(selectedCard).map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                  </select>
+                  {getAvailableVariants(selectedCard).length === 1 && getAvailableVariants(selectedCard)[0].key === 'normal' && !selectedCard?.variants && (
+                    <p className="text-[10px] text-slate-500 mt-1">Keine Varianteninfo von TCGdex für diese Karte — falls du eine Holo-Version hast, wähl sie trotzdem oben aus (Preis wird dann ggf. auf "Normal"-Basis geschätzt).</p>
+                  )}
+                </div>
                 <div className="bg-slate-950 border border-cyan-500/30 p-3 rounded-lg text-center shadow-inner">
                   <p className="text-[10px] text-slate-400 uppercase tracking-wider">Geschätzter Richtwert</p>
-                  <p className="text-xl font-black text-emerald-400">~{calculatePrice(selectedCard, cardCondition, cardLanguage)} €</p>
-                  <p className="text-[10px] text-slate-500 mt-1">Hochgerechnet aus dem Cardmarket-Trendpreis (Near Mint) × Zustand/Sprache. Kein Live-Preis von Cardmarket selbst.</p>
+                  <p className="text-xl font-black text-emerald-400">~{calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant)} €</p>
+                  <p className="text-[10px] text-slate-500 mt-1">Hochgerechnet aus dem Cardmarket-Trendpreis ({VARIANTS.find(v => v.key === cardVariant)?.holo ? 'Holo' : 'Normal'}, Near Mint) × Zustand/Sprache. Kein Live-Preis von Cardmarket selbst.</p>
                 </div>
                 <div>
                   <label className="text-xs text-slate-400">Eigenen Preis eintragen (optional)</label>
