@@ -168,6 +168,7 @@ export default function App() {
   const [filterLang, setFilterLang] = useState('Alle');
   const [filterSet, setFilterSet] = useState('Alle');
   const [sortBy, setSortBy] = useState('name-asc');
+  const [collectionSearch, setCollectionSearch] = useState('');
 
   const unsubscribers = useRef([]);
 
@@ -434,6 +435,15 @@ export default function App() {
     }
   };
 
+  // Schnelle Abfrage, ob eine Karte schon auf der Watchlist ist (für den
+  // Stern in der Suche). Ein Klick auf den Stern schaltet um: hinzufügen
+  // bzw. wieder entfernen.
+  const watchlistIds = new Set(watchlist.map((c) => c.id));
+  const toggleWatchlist = (card) => {
+    if (watchlistIds.has(card.id)) removeFromWatchlist(card.id);
+    else addToWatchlistCard(card);
+  };
+
   const formatAdded = (ts) => ts
     ? new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     : null;
@@ -452,6 +462,8 @@ export default function App() {
 
   const filteredCollection = (() => {
     let list = [...collection];
+    const q = collectionSearch.trim().toLowerCase();
+    if (q) list = list.filter(i => (i.name || '').toLowerCase().includes(q));
     if (filterLang !== 'Alle') list = list.filter(i => i.userLanguage === filterLang);
     if (filterSet !== 'Alle') list = list.filter(i => i.set?.name === filterSet);
 
@@ -573,18 +585,18 @@ export default function App() {
             <div className="bg-slate-900 border border-cyan-500/30 p-6 rounded-2xl shadow-xl shadow-cyan-900/10">
               <h2 className="text-xl font-black text-white mb-1">Willkommen zurück, {currentUser || 'Trainer'}</h2>
               <p className="text-slate-400 text-sm mb-6">Wert deiner Collection</p>
-              <div className="grid grid-cols-3 gap-3 text-center">
-                <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-center">
-                  <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-widest">Minimalwert</p>
-                  <p className="text-base sm:text-lg font-bold text-slate-300 mt-1">{stats.min} €</p>
-                </div>
-                <div className="bg-slate-950 border border-cyan-500/50 p-4 rounded-xl shadow-lg shadow-cyan-500/20 scale-105 z-10 flex flex-col justify-center">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-center">
+                <div className="order-first sm:order-none col-span-2 sm:col-span-1 min-w-0 bg-slate-950 border border-cyan-500/50 p-4 rounded-xl shadow-lg shadow-cyan-500/20 sm:scale-105 z-10 flex flex-col justify-center">
                   <p className="text-[10px] sm:text-xs text-cyan-400 font-black uppercase tracking-widest">Medianwert</p>
-                  <p className="text-xl sm:text-2xl font-black text-cyan-300 mt-1">{stats.median} €</p>
+                  <p className="text-2xl font-black text-cyan-300 mt-1 break-words">{stats.median} €</p>
                 </div>
-                <div className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col justify-center">
-                  <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-widest">Maximalwert</p>
-                  <p className="text-base sm:text-lg font-bold text-emerald-400 mt-1">{stats.max} €</p>
+                <div className="sm:order-first min-w-0 bg-slate-950 border border-slate-800 p-3 sm:p-4 rounded-xl flex flex-col justify-center">
+                  <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-wider sm:tracking-widest">Minimalwert</p>
+                  <p className="text-base sm:text-lg font-bold text-slate-300 mt-1 break-words">{stats.min} €</p>
+                </div>
+                <div className="min-w-0 bg-slate-950 border border-slate-800 p-3 sm:p-4 rounded-xl flex flex-col justify-center">
+                  <p className="text-[10px] sm:text-xs text-slate-400 uppercase tracking-wider sm:tracking-widest">Maximalwert</p>
+                  <p className="text-base sm:text-lg font-bold text-emerald-400 mt-1 break-words">{stats.max} €</p>
                 </div>
               </div>
               <div className="mt-6 pt-4 border-t border-slate-800 flex justify-between text-sm">
@@ -602,6 +614,24 @@ export default function App() {
         {activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
             <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md">
+              <div className="relative col-span-2 md:col-span-4">
+                <input
+                  type="text"
+                  value={collectionSearch}
+                  onChange={e => setCollectionSearch(e.target.value)}
+                  placeholder="In der Collection suchen, z.B. Glumanda"
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 text-sm text-slate-200 rounded-lg pl-3 pr-9 py-2 outline-none"
+                />
+                {collectionSearch && (
+                  <button
+                    onClick={() => setCollectionSearch('')}
+                    aria-label="Suche zurücksetzen"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-cyan-400 text-sm px-1"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
               <select value={filterLang} onChange={e => setFilterLang(e.target.value)} className="bg-slate-950 text-xs border border-slate-800 rounded-lg p-2 text-slate-300">
                 <option value="Alle">Alle Sprachen</option>
                 {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
@@ -735,7 +765,19 @@ export default function App() {
                       >
                         ➕ Coll
                       </button>
-                      <button onClick={() => addToWatchlistCard(card)} className="bg-slate-800 text-slate-300 hover:text-cyan-400 text-xs px-3 rounded-lg border border-slate-700 transition-colors">★</button>
+                      {(() => {
+                        const inWatchlist = watchlistIds.has(card.id);
+                        return (
+                          <button
+                            onClick={() => toggleWatchlist(card)}
+                            aria-pressed={inWatchlist}
+                            title={inWatchlist ? 'Von der Watchlist entfernen' : 'Zur Watchlist hinzufügen'}
+                            className={`text-xs px-3 rounded-lg border transition-colors ${inWatchlist ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/30' : 'bg-slate-800 text-slate-300 hover:text-cyan-400 border-slate-700'}`}
+                          >
+                            ★
+                          </button>
+                        );
+                      })()}
                     </div>
                   </div>
                 );
