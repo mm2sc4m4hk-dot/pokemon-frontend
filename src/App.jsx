@@ -343,7 +343,7 @@ export default function App() {
         setSearchError('Keine Karten gefunden oder Fehler bei der Abfrage.');
       } else if (data.length === 0) {
         setSearchResults([]);
-        setSearchError('Keine Karten mit diesem Namen (und Set) gefunden.');
+        setSearchError('Keine Karten mit diesem Namen/dieser Nummer (und Set) gefunden.');
       } else {
         setSearchResults(data);
       }
@@ -671,7 +671,7 @@ export default function App() {
         {activeTab === 'search' && (
           <div className="space-y-6 fade-in">
             <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
-              <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kartennamen suchen..." className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
+              <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Name oder Name + Nummer, z.B. Glumanda 044" className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
               <input type="text" value={searchSet} onChange={e => setSearchSet(e.target.value)} placeholder="Set (optional, z.B. Base Set)" className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
               <button type="submit" className="bg-cyan-500 text-slate-950 font-bold px-6 py-3 rounded-xl hover:bg-cyan-400 transition-colors">Suche</button>
             </form>
@@ -687,7 +687,7 @@ export default function App() {
                 return (
                   <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
                     <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
-                    <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}</h3>
+                    <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}{card.number ? <span className="text-slate-500 font-normal"> #{card.number}{card.set?.total ? `/${card.set.total}` : ''}</span> : null}</h3>
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
 
                     <div className="flex flex-wrap gap-1 mt-2">
@@ -748,7 +748,7 @@ export default function App() {
             <div className="flex gap-4 mb-4">
               <CardImage src={selectedCard.customImage || selectedCard.images?.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
               <div>
-                <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}</h3>
+                <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}{selectedCard.number ? <span className="text-slate-500 font-normal text-sm"> #{selectedCard.number}{selectedCard.set?.total ? `/${selectedCard.set.total}` : ''}</span> : null}</h3>
                 <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
                 <div className="mt-2 text-xs text-slate-300">Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span></div>
                 {selectedCard.cardmarket?.url && (
@@ -814,10 +814,10 @@ export default function App() {
                 <div>
                   <label className="text-xs text-slate-400">Variante</label>
                   <select value={cardVariant} onChange={e => setCardVariant(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
-                    {getAvailableVariants(selectedCard).map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                    {VARIANTS.map(v => <option key={v.key} value={v.key}>{v.label}{selectedCard?.variants && !selectedCard.variants[v.key] ? ' (laut TCGdex nicht bekannt)' : ''}</option>)}
                   </select>
-                  {getAvailableVariants(selectedCard).length === 1 && getAvailableVariants(selectedCard)[0].key === 'normal' && !selectedCard?.variants && (
-                    <p className="text-[10px] text-slate-500 mt-1">Keine Varianteninfo von TCGdex für diese Karte — falls du eine Holo-Version hast, wähl sie trotzdem oben aus (Preis wird dann ggf. auf "Normal"-Basis geschätzt).</p>
+                  {(!selectedCard?.variants || !selectedCard.variants[cardVariant]) && (
+                    <p className="text-[10px] text-slate-500 mt-1">Diese Variante ist bei TCGdex für die Karte nicht hinterlegt — der Preis ist dann nur eine Schätzung. Du kannst unten deinen eigenen Preis eintragen.</p>
                   )}
                 </div>
                 <div className="bg-slate-950 border border-cyan-500/30 p-3 rounded-lg text-center shadow-inner">
