@@ -11,6 +11,7 @@ import {
   doc,
   addDoc,
   setDoc,
+  updateDoc,
   deleteDoc,
   onSnapshot
 } from 'firebase/firestore';
@@ -169,6 +170,10 @@ export default function App() {
   // Collection übernommen wird (und ob sie dort danach entfernt werden soll).
   const [moveFromWatchlistId, setMoveFromWatchlistId] = useState(null);
   const [removeFromWatchlistAfter, setRemoveFromWatchlistAfter] = useState(true);
+
+  // Collection-Karte bearbeiten: Preis beim Öffnen merken, um zu erkennen,
+  // ob der Nutzer ihn selbst geändert hat.
+  const [editOriginalPrice, setEditOriginalPrice] = useState('');
 
   // Eigene Karte anlegen (für Karten, die es in TCGdex nicht gibt, z.B.
   // Dedenne GX 195a oder chinesische Exklusivkarten).
@@ -420,6 +425,46 @@ export default function App() {
       setCardVariant('normal');
     } catch (err) {
       alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
+  };
+
+  const openEditCard = (item) => {
+    setSelectedCard(item);
+    setCardCondition(item.userCondition || 'Near Mint');
+    setCardLanguage(item.userLanguage || 'Deutsch 🇩🇪');
+    setCardVariant(item.userVariant || 'normal');
+    setCustomPrice(item.userPrice ? String(item.userPrice) : '');
+    setEditOriginalPrice(item.userPrice ? String(item.userPrice) : '');
+    setCustomImage(item.customImage || '');
+    setMoveFromWatchlistId(null);
+    setModalType('edit');
+  };
+
+  const saveEdit = async () => {
+    if (!auth.currentUser || !selectedCard?.docId) return;
+    // Hat der Nutzer den Preis selbst geändert -> den nehmen. Sonst bei
+    // normalen Karten neu aus Zustand/Sprache/Variante berechnen; bei
+    // eigenen Karten (ohne Cardmarket-Preis) den bisherigen Preis behalten.
+    const priceTouched = customPrice !== editOriginalPrice && customPrice !== '';
+    let price;
+    if (priceTouched) price = parseFloat(customPrice).toFixed(2);
+    else if (selectedCard.isCustom) price = selectedCard.userPrice || '0.00';
+    else price = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant);
+    try {
+      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'collection', selectedCard.docId), {
+        userCondition: cardCondition,
+        userLanguage: cardLanguage,
+        userVariant: cardVariant,
+        userPrice: price,
+        customImage: customImage || null
+      });
+      setModalType(null);
+      setCustomPrice('');
+      setCustomImage('');
+      setEditOriginalPrice('');
+      setCardVariant('normal');
+    } catch (err) {
+      alert('Änderung fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
     }
   };
 
@@ -712,6 +757,7 @@ export default function App() {
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                 {filteredCollection.map((item) => (
                   <div key={item.docId} className="bg-slate-900 border border-slate-800 rounded-xl p-3 relative group shadow-lg">
+                    <button onClick={() => openEditCard(item)} title="Bearbeiten" className="absolute top-2 left-2 bg-slate-950/80 text-cyan-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-cyan-500/30 hover:bg-cyan-500 hover:text-slate-950 transition">✎</button>
                     <button onClick={() => removeFromCollection(item.docId)} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
                     <CardImage onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.customImage || item.images?.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <h3 className="font-bold text-sm text-slate-200 truncate">{item.name}</h3>
@@ -931,7 +977,7 @@ export default function App() {
               </div>
             )}
 
-            {modalType === 'collection' && (
+            {(modalType === 'collection' || modalType === 'edit') && (
               <div className="space-y-3 mb-4 border-t border-slate-800 pt-3">
                 {moveFromWatchlistId && (
                   <label className="flex items-center gap-2 text-xs text-slate-300">
@@ -966,7 +1012,10 @@ export default function App() {
                   <p className="text-[10px] text-slate-500 mt-1">Hochgerechnet aus dem Cardmarket-Trendpreis ({VARIANTS.find(v => v.key === cardVariant)?.holo ? 'Holo' : 'Normal'}, Near Mint) × Zustand/Sprache. Kein Live-Preis von Cardmarket selbst.</p>
                 </div>
                 <div>
-                  <label className="text-xs text-slate-400">Eigenen Preis eintragen (optional)</label>
+                  <label className="text-xs text-slate-400">{modalType === 'edit' ? 'Preis in €' : 'Eigenen Preis eintragen (optional)'}</label>
+                  {modalType === 'edit' && !selectedCard?.isCustom && (
+                    <p className="text-[10px] text-slate-500">Wird bei neuem Zustand/Sprache/Variante automatisch neu berechnet — außer du trägst hier selbst einen anderen Preis ein.</p>
+                  )}
                   <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
                 </div>
                 <div>
@@ -983,7 +1032,8 @@ export default function App() {
             )}
 
             <div className="flex gap-2 pt-2">
-              <button onClick={() => { setModalType(null); setMoveFromWatchlistId(null); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              <button onClick={() => { setModalType(null); setMoveFromWatchlistId(null); setEditOriginalPrice(''); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              {modalType === 'edit' && <button onClick={saveEdit} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Änderungen speichern</button>}
               {modalType === 'collection' && <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>}
             </div>
           </div>
