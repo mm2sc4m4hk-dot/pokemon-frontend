@@ -92,6 +92,31 @@ const authErrorMessage = (code) => {
 
 // Zeigt das Kartenbild, oder einen dezenten Platzhalter statt eines
 // kaputten Bild-Icons, wenn TCGdex (noch) kein Bild für diese Karte hat.
+// Kartenname: bei Cardmarket-Treffern steht der Angriff im Namen
+// ("Dedenne [Nuzzle | Spiral Drain]") -> Name groß, Angriffe klein darunter,
+// dazu ein Abzeichen, damit man die Quelle erkennt.
+function CardTitle({ card, size = 'sm', truncate = true }) {
+  const isCm = card.source === 'cardmarket';
+  const m = isCm ? String(card.name).match(/^([^\[]*?)\s*\[(.*)\]\s*$/) : null;
+  const title = m ? m[1] : card.name;
+  const attacks = m ? m[2] : null;
+  const cls = size === 'lg' ? 'font-bold text-lg text-slate-100' : 'font-bold text-sm text-slate-200';
+  return (
+    <div>
+      <h3 className={`${cls} ${truncate ? 'truncate' : ''}`}>
+        {title}
+        {card.number ? <span className="text-slate-500 font-normal"> #{card.number}{card.set?.total ? `/${card.set.total}` : ''}</span> : null}
+      </h3>
+      {attacks && <p className={`text-[10px] text-slate-500 ${truncate ? 'truncate' : ''}`} title={attacks}>{attacks}</p>}
+      {isCm && (
+        <span className="inline-block mt-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5" title="Daten aus der Cardmarket-Datei: kein Bild, keine Kartennummer">
+          Cardmarket
+        </span>
+      )}
+    </div>
+  );
+}
+
 // TCGdex-Bild-URLs haben die Form assets.tcgdex.net/<sprache>/<serie>/<set>/<nr>/...
 // Für manche deutschen Sets (z.B. Zenit der Könige) existiert die URL, aber die
 // Datei nicht -> dann automatisch dieselbe Karte auf Englisch probieren.
@@ -788,7 +813,7 @@ export default function App() {
                     <button onClick={() => openEditCard(item)} title="Bearbeiten" className="absolute top-2 left-2 bg-slate-950/80 text-cyan-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-cyan-500/30 hover:bg-cyan-500 hover:text-slate-950 transition">✎</button>
                     <button onClick={() => removeFromCollection(item.docId)} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
                     <CardImage onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.customImage || item.images?.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
-                    <h3 className="font-bold text-sm text-slate-200 truncate">{item.name}</h3>
+                    <CardTitle card={item} />
                     <p className="text-xs text-slate-400 truncate">{item.set?.name || 'Unbekanntes Set'} • {item.userLanguage.split(' ')[0]}</p>
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-cyan-400 font-bold">{item.userPrice} €</span>
@@ -821,7 +846,7 @@ export default function App() {
                     <div key={card.id} className="bg-slate-900 border border-slate-800 hover:border-cyan-500/50 rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors">
                       <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
                       <div className="flex-1">
-                        <h4 className="font-bold text-slate-200">{card.name}</h4>
+                        <CardTitle card={card} truncate={false} />
                         <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
                         {card.addedAt && <p className="text-[10px] text-slate-500">Hinzugefügt: {formatAdded(card.addedAt)}</p>}
                         <div className="flex items-center gap-2 mt-1">
@@ -883,7 +908,7 @@ export default function App() {
                 return (
                   <div key={card.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex flex-col relative group shadow-lg">
                     <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
-                    <h3 className="font-bold text-sm text-slate-200 truncate">{card.name}{card.number ? <span className="text-slate-500 font-normal"> #{card.number}{card.set?.total ? `/${card.set.total}` : ''}</span> : null}</h3>
+                    <CardTitle card={card} />
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
 
                     <div className="flex flex-wrap gap-1 mt-2">
@@ -956,7 +981,7 @@ export default function App() {
             <div className="flex gap-4 mb-4">
               <CardImage src={selectedCard.customImage || selectedCard.images?.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
               <div>
-                <h3 className="font-bold text-lg text-slate-100">{selectedCard.name}{selectedCard.number ? <span className="text-slate-500 font-normal text-sm"> #{selectedCard.number}{selectedCard.set?.total ? `/${selectedCard.set.total}` : ''}</span> : null}</h3>
+                <CardTitle card={selectedCard} size="lg" truncate={false} />
                 <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
                 <div className="mt-2 text-xs text-slate-300">Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span></div>
                 {selectedCard.cardmarket?.url && (
