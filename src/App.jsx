@@ -92,8 +92,27 @@ const authErrorMessage = (code) => {
 
 // Zeigt das Kartenbild, oder einen dezenten Platzhalter statt eines
 // kaputten Bild-Icons, wenn TCGdex (noch) kein Bild für diese Karte hat.
+// TCGdex-Bild-URLs haben die Form assets.tcgdex.net/<sprache>/<serie>/<set>/<nr>/...
+// Für manche deutschen Sets (z.B. Zenit der Könige) existiert die URL, aber die
+// Datei nicht -> dann automatisch dieselbe Karte auf Englisch probieren.
+function englishImageUrl(url) {
+  if (!url || !url.includes('assets.tcgdex.net/')) return null;
+  const swapped = url.replace(/assets\.tcgdex\.net\/(?!en\/)[a-z-]+\//, 'assets.tcgdex.net/en/');
+  return swapped !== url ? swapped : null;
+}
+
 function CardImage({ src, alt, className, onClick }) {
-  if (!src) {
+  const [failedSrc, setFailedSrc] = useState(null); // Quelle, die nicht lädt
+  const [enFailed, setEnFailed] = useState(false);
+
+  // Bei neuer Quelle wieder von vorne anfangen
+  useEffect(() => { setFailedSrc(null); setEnFailed(false); }, [src]);
+
+  const en = englishImageUrl(src);
+  let shown = src;
+  if (failedSrc === src) shown = en && !enFailed ? en : null;
+
+  if (!shown) {
     return (
       <div
         onClick={onClick}
@@ -104,7 +123,16 @@ function CardImage({ src, alt, className, onClick }) {
       </div>
     );
   }
-  return <img onClick={onClick} src={src} alt={alt} className={className} />;
+  return (
+    <img
+      onClick={onClick}
+      src={shown}
+      alt={alt}
+      loading="lazy"
+      onError={() => { if (failedSrc === src) setEnFailed(true); else setFailedSrc(src); }}
+      className={className}
+    />
+  );
 }
 
 // Verkleinert ein hochgeladenes Foto client-seitig (max. Breite 500px,
