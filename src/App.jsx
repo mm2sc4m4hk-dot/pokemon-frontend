@@ -165,6 +165,18 @@ export default function App() {
   const [customPrice, setCustomPrice] = useState('');
   const [customImage, setCustomImage] = useState('');
 
+  // Watchlist -> Collection: merkt sich, welche Watchlist-Karte gerade in die
+  // Collection übernommen wird (und ob sie dort danach entfernt werden soll).
+  const [moveFromWatchlistId, setMoveFromWatchlistId] = useState(null);
+  const [removeFromWatchlistAfter, setRemoveFromWatchlistAfter] = useState(true);
+
+  // Eigene Karte anlegen (für Karten, die es in TCGdex nicht gibt, z.B.
+  // Dedenne GX 195a oder chinesische Exklusivkarten).
+  const [customCardOpen, setCustomCardOpen] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customNumber, setCustomNumber] = useState('');
+  const [customSetName, setCustomSetName] = useState('');
+
   const [filterLang, setFilterLang] = useState('Alle');
   const [filterSet, setFilterSet] = useState('Alle');
   const [sortBy, setSortBy] = useState('name-asc');
@@ -398,9 +410,51 @@ export default function App() {
       await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
       // kein manuelles setCollection nötig — der Firestore-Live-Listener
       // (onSnapshot) aktualisiert die Ansicht automatisch.
+      if (moveFromWatchlistId && removeFromWatchlistAfter) {
+        await removeFromWatchlist(moveFromWatchlistId);
+      }
       setModalType(null);
+      setMoveFromWatchlistId(null);
       setCustomPrice('');
       setCustomImage('');
+      setCardVariant('normal');
+    } catch (err) {
+      alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
+  };
+
+  const closeCustomCard = () => {
+    setCustomCardOpen(false);
+    setCustomName(''); setCustomNumber(''); setCustomSetName('');
+    setCustomPrice(''); setCustomImage('');
+  };
+
+  const saveCustomCard = async () => {
+    if (!auth.currentUser) return;
+    if (!customName.trim()) {
+      alert('Bitte einen Kartennamen eintragen.');
+      return;
+    }
+    const price = customPrice ? parseFloat(customPrice).toFixed(2) : '0.00';
+    const newItem = {
+      id: `custom-${Date.now()}`,
+      name: customName.trim(),
+      number: customNumber.trim() || null,
+      images: { small: '', large: '' },
+      set: { name: customSetName.trim() || null, total: null },
+      variants: null,
+      cardmarket: { url: '', prices: {} },
+      isCustom: true,
+      userCondition: cardCondition,
+      userLanguage: cardLanguage,
+      userVariant: cardVariant,
+      userPrice: price,
+      customImage: customImage || null,
+      addedAt: Date.now()
+    };
+    try {
+      await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
+      closeCustomCard();
       setCardVariant('normal');
     } catch (err) {
       alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
@@ -701,7 +755,24 @@ export default function App() {
                           {getTrendIcon(card)}
                         </div>
                       </div>
-                      <button onClick={() => removeFromWatchlist(card.id)} className="text-slate-500 hover:text-rose-400 px-2 py-2 text-xl font-bold">✕</button>
+                      <div className="flex flex-col items-stretch gap-2">
+                        <button
+                          onClick={() => {
+                            setSelectedCard(card);
+                            setCardCondition('Near Mint');
+                            setCardLanguage('Deutsch 🇩🇪');
+                            setCardVariant(getAvailableVariants(card)[0].key);
+                            setMoveFromWatchlistId(card.id);
+                            setRemoveFromWatchlistAfter(true);
+                            setModalType('collection');
+                          }}
+                          title="In die Collection übernehmen"
+                          className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold px-3 py-2 rounded-lg border border-cyan-500/30 transition-colors"
+                        >
+                          ➕ Coll
+                        </button>
+                        <button onClick={() => removeFromWatchlist(card.id)} className="text-slate-500 hover:text-rose-400 text-sm font-bold">✕</button>
+                      </div>
                     </div>
                   );
                 })}
@@ -720,6 +791,15 @@ export default function App() {
 
             {loading && <div className="text-center text-cyan-400 py-10">Lade Karten...</div>}
             {searchError && <div className="text-center text-rose-400 py-10">{searchError}</div>}
+
+            <div className="text-center">
+              <button
+                onClick={() => setCustomCardOpen(true)}
+                className="text-xs text-cyan-400 hover:underline"
+              >
+                Karte nicht gefunden? Eigene Karte anlegen
+              </button>
+            </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
               {Array.isArray(searchResults) && searchResults.map((card) => {
@@ -853,6 +933,12 @@ export default function App() {
 
             {modalType === 'collection' && (
               <div className="space-y-3 mb-4 border-t border-slate-800 pt-3">
+                {moveFromWatchlistId && (
+                  <label className="flex items-center gap-2 text-xs text-slate-300">
+                    <input type="checkbox" checked={removeFromWatchlistAfter} onChange={e => setRemoveFromWatchlistAfter(e.target.checked)} className="accent-cyan-500" />
+                    Danach von der Watchlist entfernen
+                  </label>
+                )}
                 <div>
                   <label className="text-xs text-slate-400">Zustand (Condition)</label>
                   <select value={cardCondition} onChange={e => setCardCondition(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
@@ -897,8 +983,68 @@ export default function App() {
             )}
 
             <div className="flex gap-2 pt-2">
-              <button onClick={() => { setModalType(null); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              <button onClick={() => { setModalType(null); setMoveFromWatchlistId(null); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
               {modalType === 'collection' && <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>}
+            </div>
+          </div>
+        </div>
+      )}
+      {customCardOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
+            <h3 className="font-bold text-lg text-slate-100 mb-1">Eigene Karte anlegen</h3>
+            <p className="text-[10px] text-slate-500 mb-3">Für Karten, die die Kartendatenbank nicht kennt. Einen Cardmarket-Preis gibt es dafür nicht — trag deinen Preis selbst ein.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-slate-400">Name *</label>
+                <input type="text" value={customName} onChange={e => setCustomName(e.target.value)} placeholder="z.B. Dedenne GX" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs text-slate-400">Nummer</label>
+                  <input type="text" value={customNumber} onChange={e => setCustomNumber(e.target.value)} placeholder="z.B. 195a" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs text-slate-400">Set</label>
+                  <input type="text" value={customSetName} onChange={e => setCustomSetName(e.target.value)} placeholder="optional" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                </div>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Sprache der Karte</label>
+                <select value={cardLanguage} onChange={e => setCardLanguage(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                  {LANGUAGES.map(l => <option key={l.name} value={l.name}>{l.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Zustand (Condition)</label>
+                <select value={cardCondition} onChange={e => setCardCondition(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                  {CONDITIONS.map(c => <option key={c.name} value={c.name}>{c.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Variante</label>
+                <select value={cardVariant} onChange={e => setCardVariant(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                  {VARIANTS.map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Dein Preis in € (optional)</label>
+                <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">Foto der Karte (optional)</label>
+                <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs text-slate-400 mt-1 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:text-cyan-400 file:text-xs file:font-bold hover:file:bg-cyan-500/30" />
+                {customImage && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <img src={customImage} alt="Eigenes Foto" className="w-12 h-16 object-cover rounded border border-slate-700" />
+                    <button onClick={() => setCustomImage('')} className="text-xs text-rose-400 hover:underline">Entfernen</button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 pt-4">
+              <button onClick={closeCustomCard} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Abbrechen</button>
+              <button onClick={saveCustomCard} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg shadow-cyan-500/20">Speichern</button>
             </div>
           </div>
         </div>
