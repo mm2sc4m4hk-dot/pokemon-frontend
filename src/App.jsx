@@ -100,6 +100,17 @@ const parseMoney = (v) => {
   return Number.isFinite(n) && n >= 0 ? n.toFixed(2) : null;
 };
 
+// TCGdex-Karten-IDs haben die Form "<set-id>-<nummer>" (z.B. "sv08.5-061").
+// Ältere Collection-Einträge haben noch keine set.id gespeichert -> aus der
+// Karten-ID ableiten. Eigene Karten und reine Cardmarket-Treffer haben keine.
+const setIdOf = (item) => {
+  if (item?.set?.id) return item.set.id;
+  const id = String(item?.id || '');
+  if (!id || id.startsWith('custom-') || id.startsWith('cm-')) return null;
+  const i = id.lastIndexOf('-');
+  return i > 0 ? id.slice(0, i) : null;
+};
+
 // Set-Fortschritt: gruppiert die Collection nach Set und zeigt, wie viele
 // Karten eines Sets vorhanden sind. Beim Aufklappen werden die fehlenden
 // Karten vom Backend (TCGdex) geladen.
@@ -110,7 +121,7 @@ function SetsView({ collection }) {
   const groups = new Map();
   let withoutSet = 0;
   collection.forEach(item => {
-    const sid = item.set?.id;
+    const sid = setIdOf(item);
     if (!sid) { withoutSet += 1; return; }
     const g = groups.get(sid) || { id: sid, name: item.set?.name || sid, total: item.set?.total || null, ids: new Set() };
     g.ids.add(item.id);
