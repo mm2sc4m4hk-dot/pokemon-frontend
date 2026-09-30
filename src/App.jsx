@@ -92,6 +92,100 @@ const authErrorMessage = (code) => {
 
 // Zeigt das Kartenbild, oder einen dezenten Platzhalter statt eines
 // kaputten Bild-Icons, wenn TCGdex (noch) kein Bild für diese Karte hat.
+// Menge einer Collection-Karte (ältere Einträge ohne Feld zählen als 1)
+const qtyOf = (item) => Math.max(1, parseInt(item?.userQuantity, 10) || 1);
+const parseQty = (v) => Math.max(1, parseInt(v, 10) || 1);
+const parseMoney = (v) => {
+  const n = parseFloat(String(v).replace(',', '.'));
+  return Number.isFinite(n) && n >= 0 ? n.toFixed(2) : null;
+};
+
+// Set-Fortschritt: gruppiert die Collection nach Set und zeigt, wie viele
+// Karten eines Sets vorhanden sind. Beim Aufklappen werden die fehlenden
+// Karten vom Backend (TCGdex) geladen.
+function SetsView({ collection }) {
+  const [open, setOpen] = useState(null);
+  const [cache, setCache] = useState({}); // setId -> { loading, error, cards }
+
+  const groups = new Map();
+  let withoutSet = 0;
+  collection.forEach(item => {
+    const sid = item.set?.id;
+    if (!sid) { withoutSet += 1; return; }
+    const g = groups.get(sid) || { id: sid, name: item.set?.name || sid, total: item.set?.total || null, ids: new Set() };
+    g.ids.add(item.id);
+    groups.set(sid, g);
+  });
+  const list = [...groups.values()].sort((a, b) => {
+    const pa = a.total ? a.ids.size / a.total : 0; const pb = b.total ? b.ids.size / b.total : 0;
+    return pb - pa || a.name.localeCompare(b.name);
+  });
+
+  const toggle = async (g) => {
+    if (open === g.id) { setOpen(null); return; }
+    setOpen(g.id);
+    if (cache[g.id]?.cards) return;
+    setCache(c => ({ ...c, [g.id]: { loading: true } }));
+    try {
+      const res = await fetch(`${API_URL}/api/sets/${encodeURIComponent(g.id)}`);
+      if (!res.ok) throw new Error('Set nicht gefunden');
+      const data = await res.json();
+      setCache(c => ({ ...c, [g.id]: { cards: data.cards || [] } }));
+    } catch (e) {
+      setCache(c => ({ ...c, [g.id]: { error: e.message || 'Fehler beim Laden' } }));
+    }
+  };
+
+  if (list.length === 0) {
+    return <div className="text-center py-20 text-slate-500">Noch keine Karten mit Set-Zuordnung in deiner Collection.</div>;
+  }
+
+  return (
+    <div className="space-y-3">
+      {list.map(g => {
+        const owned = g.ids.size;
+        const pct = g.total ? Math.min(100, Math.round((owned / g.total) * 100)) : 0;
+        const c = cache[g.id];
+        const missing = c?.cards ? c.cards.filter(card => !g.ids.has(card.id)) : [];
+        return (
+          <div key={g.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 shadow-md">
+            <button onClick={() => toggle(g)} className="w-full text-left">
+              <div className="flex justify-between items-baseline gap-2">
+                <span className="font-bold text-sm text-slate-200 truncate">{g.name}</span>
+                <span className="text-xs text-cyan-400 font-bold whitespace-nowrap">{owned}{g.total ? ` / ${g.total}` : ''}{g.total ? ` (${pct}%)` : ''}</span>
+              </div>
+              <div className="h-2 bg-slate-800 rounded-full mt-2 overflow-hidden">
+                <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+              </div>
+            </button>
+            {open === g.id && (
+              <div className="mt-3 pt-3 border-t border-slate-800">
+                {c?.loading && <p className="text-xs text-cyan-400">Lade Kartenliste…</p>}
+                {c?.error && <p className="text-xs text-rose-400">{c.error}</p>}
+                {c?.cards && (missing.length === 0
+                  ? <p className="text-xs text-emerald-400">Komplett – dir fehlt keine Karte dieses Sets. 🎉</p>
+                  : <>
+                      <p className="text-[10px] text-slate-500 mb-2">Fehlend: {missing.length} (inkl. Secret Rares außerhalb der Grundnummerierung)</p>
+                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                        {missing.map(card => (
+                          <div key={card.id} className="text-center">
+                            <CardImage src={card.image} alt={card.name} className="w-full rounded-md opacity-70" />
+                            <p className="text-[10px] text-slate-400 mt-1 truncate">#{card.localId} {card.name}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {withoutSet > 0 && <p className="text-[10px] text-slate-500 text-center">{withoutSet} Karten ohne Set-Zuordnung (z. B. eigene Karten oder ältere Einträge) sind hier nicht enthalten.</p>}
+    </div>
+  );
+}
+
 // Kartenname: bei Cardmarket-Treffern steht der Angriff im Namen
 // ("Dedenne [Nuzzle | Spiral Drain]") -> Name groß, Angriffe klein darunter,
 // dazu ein Abzeichen, damit man die Quelle erkennt.
@@ -234,6 +328,13 @@ export default function App() {
   const [customName, setCustomName] = useState('');
   const [customNumber, setCustomNumber] = useState('');
   const [customSetName, setCustomSetName] = useState('');
+
+  // Menge und Einkaufspreis (pro Stück) für Hinzufügen/Bearbeiten
+  const [cardQuantity, setCardQuantity] = useState('1');
+  const [purchasePrice, setPurchasePrice] = useState('');
+  const [collectionView, setCollectionView] = useState('cards'); // 'cards' | 'sets'
+  useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); } }, [modalType]);
+  useEffect(() => { if (customCardOpen) { setCardQuantity('1'); setPurchasePrice(''); } }, [customCardOpen]);
 
   const [filterLang, setFilterLang] = useState('Alle');
   const [filterSet, setFilterSet] = useState('Alle');
@@ -459,6 +560,8 @@ export default function App() {
       userLanguage: cardLanguage,
       userVariant: cardVariant,
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
+      userQuantity: parseQty(cardQuantity),
+      userPurchasePrice: parseMoney(purchasePrice),
       customImage: customImage || null,
       addedAt: Date.now()
     };
@@ -489,6 +592,8 @@ export default function App() {
     setCustomPrice(item.userPrice ? String(item.userPrice) : '');
     setEditOriginalPrice(item.userPrice ? String(item.userPrice) : '');
     setCustomImage(item.customImage || '');
+    setCardQuantity(String(qtyOf(item)));
+    setPurchasePrice(item.userPurchasePrice ? String(item.userPurchasePrice) : '');
     setMoveFromWatchlistId(null);
     setModalType('edit');
   };
@@ -509,6 +614,8 @@ export default function App() {
         userLanguage: cardLanguage,
         userVariant: cardVariant,
         userPrice: price,
+        userQuantity: parseQty(cardQuantity),
+        userPurchasePrice: parseMoney(purchasePrice),
         customImage: customImage || null
       });
       setModalType(null);
@@ -547,6 +654,8 @@ export default function App() {
       userLanguage: cardLanguage,
       userVariant: cardVariant,
       userPrice: price,
+      userQuantity: parseQty(cardQuantity),
+      userPurchasePrice: parseMoney(purchasePrice),
       customImage: customImage || null,
       addedAt: Date.now()
     };
@@ -604,13 +713,29 @@ export default function App() {
     if (collection.length === 0) return { min: '0.00', median: '0.00', max: '0.00' };
     let total = 0, totalMin = 0, totalMax = 0;
     collection.forEach(item => {
-      const price = parseFloat(item.userPrice) || 0;
+      const price = (parseFloat(item.userPrice) || 0) * qtyOf(item);
       total += price;
       totalMin += price * 0.85;
       totalMax += price * 1.25;
     });
     return { min: totalMin.toFixed(2), median: total.toFixed(2), max: totalMax.toFixed(2) };
   })();
+
+  // Gesamtzahl (mit Mengen) und Gewinn/Verlust – nur über Karten mit Einkaufspreis
+  const totalPieces = collection.reduce((sum, item) => sum + qtyOf(item), 0);
+  const invest = (() => {
+    let cost = 0, value = 0, n = 0;
+    collection.forEach(item => {
+      const buy = parseFloat(item.userPurchasePrice);
+      if (!Number.isFinite(buy)) return;
+      const q = qtyOf(item);
+      cost += buy * q;
+      value += (parseFloat(item.userPrice) || 0) * q;
+      n += 1;
+    });
+    return { cost, value, profit: value - cost, n };
+  })();
+  const fmtSigned = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)} €`;
 
   const filteredCollection = (() => {
     let list = [...collection];
@@ -753,8 +878,15 @@ export default function App() {
               </div>
               <div className="mt-6 pt-4 border-t border-slate-800 flex justify-between text-sm">
                 <span className="text-slate-400">Anzahl Karten:</span>
-                <span className="font-bold text-cyan-400">{collection.length} Stück</span>
+                <span className="font-bold text-cyan-400">{totalPieces} Stück{totalPieces !== collection.length ? ` (${collection.length} verschiedene)` : ''}</span>
               </div>
+              {invest.n > 0 && (
+                <div className="mt-4 pt-4 border-t border-slate-800 space-y-2 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-400">Investiert ({invest.n} Karten mit Einkaufspreis):</span><span className="font-bold text-slate-200">{invest.cost.toFixed(2)} €</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Aktueller Wert dieser Karten:</span><span className="font-bold text-slate-200">{invest.value.toFixed(2)} €</span></div>
+                  <div className="flex justify-between"><span className="text-slate-400">Gewinn / Verlust:</span><span className={`font-black ${invest.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtSigned(invest.profit)}</span></div>
+                </div>
+              )}
               <div className="mt-2 flex justify-between text-sm">
                 <span className="text-slate-400">Karten auf der Watchlist:</span>
                 <span className="font-bold text-cyan-400">{watchlist.length} Stück</span>
@@ -765,7 +897,12 @@ export default function App() {
 
         {activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
-            <div className="bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md">
+            <div className="flex gap-2">
+              {[['cards', '🎴 Karten'], ['sets', '📊 Set-Fortschritt']].map(([key, label]) => (
+                <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
+              ))}
+            </div>
+            <div className={`bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md ${collectionView === 'sets' ? 'hidden' : ''}`}>
               <div className="relative col-span-2 md:col-span-4">
                 <input
                   type="text"
@@ -804,7 +941,9 @@ export default function App() {
                 <option value="added-asc">Zuerst hinzugefügt</option>
               </select>
             </div>
-            {filteredCollection.length === 0 ? (
+            {collectionView === 'sets' ? (
+              <SetsView collection={collection} />
+            ) : filteredCollection.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Keine Karten gefunden.</div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
@@ -825,6 +964,17 @@ export default function App() {
                         {getTrendIcon(item, item.userVariant)}
                       </div>
                     </div>
+                    {qtyOf(item) > 1 && (
+                      <p className="text-[11px] text-slate-300 mt-1">×{qtyOf(item)} · zusammen {((parseFloat(item.userPrice) || 0) * qtyOf(item)).toFixed(2)} €</p>
+                    )}
+                    {Number.isFinite(parseFloat(item.userPurchasePrice)) && (() => {
+                      const diff = ((parseFloat(item.userPrice) || 0) - parseFloat(item.userPurchasePrice)) * qtyOf(item);
+                      return (
+                        <p className="text-[11px] mt-1 text-slate-400">
+                          Kauf {parseFloat(item.userPurchasePrice).toFixed(2)} € · <span className={diff >= 0 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>{fmtSigned(diff)}</span>
+                        </p>
+                      );
+                    })()}
                     {item.addedAt && <p className="text-[10px] text-slate-500 mt-1">Hinzugefügt: {formatAdded(item.addedAt)}</p>}
                   </div>
                 ))}
@@ -1071,6 +1221,16 @@ export default function App() {
                   )}
                   <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
                 </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-400">Anzahl</label>
+                    <input type="number" min="1" step="1" value={cardQuantity} onChange={e => setCardQuantity(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">Einkaufspreis pro Stück €</label>
+                    <input type="number" min="0" step="0.01" value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} placeholder="optional" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                  </div>
+                </div>
                 <div>
                   <label className="text-xs text-slate-400">Eigenes Foto der Karte (optional, z.B. wenn kein Bild vorhanden ist)</label>
                   <input type="file" accept="image/*" onChange={handleImageUpload} className="w-full text-xs text-slate-400 mt-1 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-500/20 file:text-cyan-400 file:text-xs file:font-bold hover:file:bg-cyan-500/30" />
@@ -1133,6 +1293,16 @@ export default function App() {
               <div>
                 <label className="text-xs text-slate-400">Dein Preis in € (optional)</label>
                 <input type="number" step="0.01" value={customPrice} onChange={e => setCustomPrice(e.target.value)} placeholder="0.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-slate-400">Anzahl</label>
+                  <input type="number" min="1" step="1" value={cardQuantity} onChange={e => setCardQuantity(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">Einkaufspreis pro Stück €</label>
+                  <input type="number" min="0" step="0.01" value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} placeholder="optional" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                </div>
               </div>
               <div>
                 <label className="text-xs text-slate-400">Foto der Karte (optional)</label>
