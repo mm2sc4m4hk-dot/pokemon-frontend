@@ -100,6 +100,115 @@ const parseMoney = (v) => {
   return Number.isFinite(n) && n >= 0 ? n.toFixed(2) : null;
 };
 
+// Verkaufsliste: alle Karten mit Schalter "Tausch/Verkauf", dazu Nettowert-Rechner
+// und eine fertige Textliste zum Kopieren (Chat, Cardmarket-Beschreibung ...).
+const plainName = (item) => String(item?.name || '').replace(/\s*\[.*\]\s*$/, '');
+const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
+const loadSetting = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; } };
+const saveSetting = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* egal */ } };
+
+function SellView({ items }) {
+  const [feePct, setFeePct] = useState(() => loadSetting('sellFeePct', '5'));
+  const [shipping, setShipping] = useState(() => loadSetting('sellShipping', '1.50'));
+  const [withPrice, setWithPrice] = useState(true);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { saveSetting('sellFeePct', feePct); }, [feePct]);
+  useEffect(() => { saveSetting('sellShipping', shipping); }, [shipping]);
+
+  const fee = Math.min(100, Math.max(0, parseFloat(String(feePct).replace(',', '.')) || 0));
+  const ship = Math.max(0, parseFloat(String(shipping).replace(',', '.')) || 0);
+  const sorted = [...items].sort((a, b) => (a.set?.name || '').localeCompare(b.set?.name || '') || plainName(a).localeCompare(plainName(b)));
+
+  const gross = sorted.reduce((sum, it) => sum + (parseFloat(it.userPrice) || 0) * qtyOf(it), 0);
+  const feeAmount = gross * (fee / 100);
+  const net = gross - feeAmount - (sorted.length ? ship : 0);
+
+  const lines = sorted.map(it => {
+    const variant = it.userVariant && it.userVariant !== 'normal' ? (VARIANTS.find(v => v.key === it.userVariant)?.label || it.userVariant) : '';
+    const parts = [
+      `${qtyOf(it)}x ${plainName(it)}`,
+      it.set?.name || '',
+      it.number ? `#${it.number}` : '',
+      variant,
+      it.userCondition || '',
+      String(it.userLanguage || '').split(' ')[0]
+    ].filter(Boolean);
+    return parts.join(' | ') + (withPrice ? ` | ${eur(parseFloat(it.userPrice) || 0)}` : '');
+  });
+  const text = lines.join('\n') + (withPrice && lines.length ? `\n\nSumme: ${eur(gross)} (Richtpreise)` : '');
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (err) { /* ignorieren */ }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  if (items.length === 0) {
+    return <div className="text-center py-20 text-slate-500">Noch keine Karte zum Verkauf markiert.<br /><span className="text-xs">In „Karten“ bei einer Karte auf „🏷️ Tausch/Verkauf“ tippen.</span></div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-slate-900 border border-cyan-500/30 p-4 rounded-xl shadow-md space-y-3">
+        <h3 className="font-bold text-slate-100 text-sm">Was bleibt nach dem Verkauf?</h3>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-xs text-slate-400">Gebühr in %</label>
+            <input type="number" min="0" max="100" step="0.1" value={feePct} onChange={e => setFeePct(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400">Versand (gesamt) €</label>
+            <input type="number" min="0" step="0.01" value={shipping} onChange={e => setShipping(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+          </div>
+        </div>
+        <p className="text-[10px] text-slate-500">Beispielwerte, bitte an deine echten Cardmarket-Gebühren und dein Porto anpassen. Gerechnet wird mit einer Sendung für alle Karten.</p>
+        <div className="text-sm space-y-1 pt-2 border-t border-slate-800">
+          <div className="flex justify-between"><span className="text-slate-400">Verkaufswert</span><span className="text-slate-200">{eur(gross)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-400">Gebühr ({fee}%)</span><span className="text-rose-400">−{eur(feeAmount)}</span></div>
+          <div className="flex justify-between"><span className="text-slate-400">Versand</span><span className="text-rose-400">−{eur(ship)}</span></div>
+          <div className="flex justify-between pt-1 border-t border-slate-800"><span className="font-bold text-slate-200">Bleibt dir</span><span className={`font-black ${net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{eur(net)}</span></div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {sorted.map(it => {
+          const price = parseFloat(it.userPrice) || 0;
+          return (
+            <div key={it.docId} className="bg-slate-900 border border-slate-800 rounded-lg p-2 flex justify-between gap-2 text-xs">
+              <div className="min-w-0">
+                <p className="font-bold text-slate-200 truncate">{qtyOf(it)}x {plainName(it)}</p>
+                <p className="text-slate-500 truncate">{it.set?.name || 'Unbekanntes Set'} · {it.userCondition} · {String(it.userLanguage || '').split(' ')[0]}</p>
+              </div>
+              <div className="text-right whitespace-nowrap">
+                <p className="text-cyan-400 font-bold">{eur(price * qtyOf(it))}</p>
+                <p className="text-slate-500">netto {eur(price * qtyOf(it) * (1 - fee / 100))}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl shadow-md space-y-2">
+        <div className="flex justify-between items-center">
+          <h3 className="font-bold text-slate-100 text-sm">Textliste zum Kopieren</h3>
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input type="checkbox" checked={withPrice} onChange={e => setWithPrice(e.target.checked)} className="accent-cyan-500" /> mit Preisen
+          </label>
+        </div>
+        <textarea readOnly value={text} rows={Math.min(14, lines.length + 3)} className="w-full bg-slate-950 border border-slate-800 text-slate-300 rounded-lg p-2 text-xs font-mono outline-none" />
+        <button onClick={copy} className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-2.5 rounded-xl font-black text-sm transition-colors">{copied ? 'Kopiert ✓' : 'Liste kopieren'}</button>
+      </div>
+    </div>
+  );
+}
+
 // TCGdex-Karten-IDs haben die Form "<set-id>-<nummer>" (z.B. "sv08.5-061").
 // Ältere Collection-Einträge haben noch keine set.id gespeichert -> aus der
 // Karten-ID ableiten. Eigene Karten und reine Cardmarket-Treffer haben keine.
@@ -679,6 +788,15 @@ export default function App() {
     }
   };
 
+  const toggleForSale = async (item) => {
+    if (!auth.currentUser || !item.docId) return;
+    try {
+      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'collection', item.docId), { forSale: !item.forSale });
+    } catch (err) {
+      alert('Änderung fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
+  };
+
   const removeFromCollection = async (docId) => {
     if (!auth.currentUser) return;
     try {
@@ -909,11 +1027,11 @@ export default function App() {
         {activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
             <div className="flex gap-2">
-              {[['cards', '🎴 Karten'], ['sets', '📊 Set-Fortschritt']].map(([key, label]) => (
+              {[['cards', '🎴 Karten'], ['sets', '📊 Sets'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`]].map(([key, label]) => (
                 <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
               ))}
             </div>
-            <div className={`bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md ${collectionView === 'sets' ? 'hidden' : ''}`}>
+            <div className={`bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md ${collectionView !== 'cards' ? 'hidden' : ''}`}>
               <div className="relative col-span-2 md:col-span-4">
                 <input
                   type="text"
@@ -954,6 +1072,8 @@ export default function App() {
             </div>
             {collectionView === 'sets' ? (
               <SetsView collection={collection} />
+            ) : collectionView === 'sell' ? (
+              <SellView items={collection.filter(i => i.forSale)} />
             ) : filteredCollection.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Keine Karten gefunden.</div>
             ) : (
@@ -986,6 +1106,12 @@ export default function App() {
                         </p>
                       );
                     })()}
+                    <button
+                      onClick={() => toggleForSale(item)}
+                      className={`mt-2 w-full text-[11px] font-bold py-1 rounded-md border transition-colors ${item.forSale ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'}`}
+                    >
+                      🏷️ Tausch/Verkauf {item.forSale ? '✓' : ''}
+                    </button>
                     {item.addedAt && <p className="text-[10px] text-slate-500 mt-1">Hinzugefügt: {formatAdded(item.addedAt)}</p>}
                   </div>
                 ))}
