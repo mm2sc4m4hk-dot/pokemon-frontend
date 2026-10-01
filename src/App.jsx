@@ -13,7 +13,8 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
-  onSnapshot
+  onSnapshot,
+  writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 
@@ -86,6 +87,71 @@ const plainName = (item) => String(item?.name || '').replace(/\s*\[.*\]\s*$/, ''
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const loadSetting = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; } };
 const saveSetting = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* egal */ } };
+
+// Heutiges Datum (UTC, wie bei den bereits gespeicherten Snapshots) als "YYYY-MM-DD" (Dokument-ID der Wertverlauf-Snapshots)
+const todayKey = () => new Date().toISOString().slice(0, 10);
+const daysAgoKey = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+
+// Preisobjekte vergleichen (Firestore sortiert die Schlüssel anders als das Backend)
+const samePrices = (a = {}, b = {}) => {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) if ((Number(a[k]) || 0) !== (Number(b[k]) || 0)) return false;
+  return true;
+};
+const hasPrice = (p = {}) => (p.trendPrice || p.averageSellPrice || p.trendPriceHolo || 0) > 0;
+
+// Liniendiagramm für den Wertverlauf der Collection (reines SVG, keine Bibliothek).
+function ValueChart({ points }) {
+  const [range, setRange] = useState('all');
+  if (points.length < 2) {
+    return <p className="text-xs text-slate-500 text-center py-4">Der Verlauf entsteht, sobald an mindestens zwei verschiedenen Tagen ein Wert gespeichert wurde – einfach ab und zu die App öffnen.</p>;
+  }
+  const days = range === 'all' ? null : Number(range);
+  let shown = days ? points.filter(p => p.date >= daysAgoKey(days)) : points;
+  if (shown.length < 2) shown = points.slice(-2);
+
+  const W = 300, H = 110, PX = 4, PY = 12;
+  const vals = shown.map(p => p.value);
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const span = max - min || 1;
+  const xy = shown.map((p, i) => [
+    PX + (i / (shown.length - 1)) * (W - 2 * PX),
+    PY + (1 - (p.value - min) / span) * (H - 2 * PY)
+  ]);
+  const line = xy.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `${PX},${H - PY} ${line} ${xy[xy.length - 1][0].toFixed(1)},${H - PY}`;
+  const first = shown[0], last = shown[shown.length - 1];
+  const diff = last.value - first.value;
+  const pct = first.value > 0 ? (diff / first.value) * 100 : 0;
+  const fmtDate = (d) => { const [, m, dd] = d.split('-'); return `${dd}.${m}.`; };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-between items-end">
+        <div>
+          <p className="text-2xl font-black text-cyan-300">{eur(last.value)}</p>
+          <p className={`text-xs font-bold ${diff >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {diff >= 0 ? '+' : '−'}{eur(Math.abs(diff))} ({diff >= 0 ? '+' : '−'}{Math.abs(pct).toFixed(1).replace('.', ',')} %) seit {fmtDate(first.date)}
+          </p>
+        </div>
+        <div className="flex gap-1">
+          {[['7', '7 T'], ['30', '30 T'], ['all', 'Alles']].map(([k, label]) => (
+            <button key={k} onClick={() => setRange(k)} className={`text-[10px] font-bold px-2 py-1 rounded-md border transition-colors ${range === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
+          ))}
+        </div>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-28 bg-slate-950 border border-slate-800 rounded-xl" role="img" aria-label="Wertverlauf der Collection">
+        <polygon points={area} fill="rgb(34 211 238)" fillOpacity="0.12" />
+        <polyline points={line} fill="none" stroke="rgb(34 211 238)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+      </svg>
+      <div className="flex justify-between text-[10px] text-slate-500">
+        <span>{fmtDate(first.date)}</span>
+        <span>Tief {eur(min)} · Hoch {eur(max)}</span>
+        <span>{fmtDate(last.date)}</span>
+      </div>
+    </div>
+  );
+}
 
 function SellView({ items }) {
   const [feePct, setFeePct] = useState(() => loadSetting('sellFeePct', '5'));
@@ -420,6 +486,18 @@ export default function App() {
 
   const unsubscribers = useRef([]);
 
+  // Preis-Aktualisierung & Wertverlauf
+  const [collectionReady, setCollectionReady] = useState(false);
+  const [watchlistReady, setWatchlistReady] = useState(false);
+  const [snapshots, setSnapshots] = useState([]); // [{ date, value, ... }] aufsteigend nach Datum
+  const [snapshotsReady, setSnapshotsReady] = useState(false);
+  const [snapshotsDenied, setSnapshotsDenied] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMsg, setRefreshMsg] = useState('');
+  const [lastRefreshAt, setLastRefreshAt] = useState(null);
+  const autoRefreshed = useRef(false);
+  const refreshRef = useRef(null);
+
   useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); } }, [modalType]);
   useEffect(() => { if (customCardOpen) { setCardQuantity('1'); setPurchasePrice(''); } }, [customCardOpen]);
 
@@ -445,22 +523,54 @@ export default function App() {
         setIsAuthenticated(true);
         setCurrentUser(user.displayName || user.email?.split('@')[0] || 'Trainer');
 
+        setCollectionReady(false);
+        setWatchlistReady(false);
+        setSnapshotsReady(false);
+        setSnapshotsDenied(false);
+        autoRefreshed.current = false;
+        setLastRefreshAt(Number(loadSetting('lastPriceRefresh:' + user.uid, '0')) || null);
+
         const collRef = fsCollection(db, 'users', user.uid, 'collection');
         const unsubColl = onSnapshot(collRef, (snap) => {
           setCollection(snap.docs.map((d) => ({ ...d.data(), docId: d.id, instanceId: d.id })));
+          setCollectionReady(true);
         });
 
         const watchRef = fsCollection(db, 'users', user.uid, 'watchlist');
         const unsubWatch = onSnapshot(watchRef, (snap) => {
           setWatchlist(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+          setWatchlistReady(true);
         });
 
-        unsubscribers.current.push(unsubColl, unsubWatch);
+        // Täglicher Wert-Snapshot der Collection (Dokument-ID = Datum)
+        const snapRef = fsCollection(db, 'users', user.uid, 'snapshots');
+        const unsubSnap = onSnapshot(snapRef, (snap) => {
+          setSnapshots(
+            snap.docs.map((d) => d.data())
+              .filter((s) => s.date && Number.isFinite(s.value))
+              .sort((a, b) => a.date.localeCompare(b.date))
+          );
+          setSnapshotsDenied(false);
+          setSnapshotsReady(true);
+        }, (err) => {
+          console.warn('Wertverlauf nicht lesbar (Firestore-Regeln?):', err.code);
+          setSnapshotsDenied(true);
+          setSnapshotsReady(true);
+        });
+
+        unsubscribers.current.push(unsubColl, unsubWatch, unsubSnap);
       } else {
         setIsAuthenticated(false);
         setCurrentUser('');
         setCollection([]);
         setWatchlist([]);
+        setSnapshots([]);
+        setCollectionReady(false);
+        setWatchlistReady(false);
+        setSnapshotsReady(false);
+        setLastRefreshAt(null);
+        setRefreshMsg('');
+        autoRefreshed.current = false;
       }
       setAuthLoading(false);
     });
@@ -470,34 +580,6 @@ export default function App() {
       unsubscribers.current.forEach((u) => u());
     };
   }, []);
-
-  // Automatischer täglicher Wert-Snapshot
-  useEffect(() => {
-    if (!isAuthenticated || !auth.currentUser || collection.length === 0) return;
-
-    const saveDailySnapshot = async () => {
-      const today = new Date().toISOString().split('T')[0];
-      const lastSnapshotDate = localStorage.getItem('lastSnapshotDate');
-
-      if (lastSnapshotDate === today) return;
-
-      const totalValue = collection.reduce((sum, item) => {
-        return sum + (parseFloat(item.userPrice) || 0) * qtyOf(item);
-      }, 0);
-
-      if (totalValue > 0) {
-        try {
-          const snapRef = doc(db, 'users', auth.currentUser.uid, 'snapshots', today);
-          await setDoc(snapRef, { date: today, value: totalValue, timestamp: Date.now() }, { merge: true });
-          localStorage.setItem('lastSnapshotDate', today);
-        } catch (err) {
-          console.error('Fehler beim Speichern des Snapshots:', err);
-        }
-      }
-    };
-
-    saveDailySnapshot();
-  }, [collection, isAuthenticated]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -696,6 +778,112 @@ export default function App() {
       alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
     }
   };
+
+  // Ist der gespeicherte Preis automatisch berechnet (und nicht vom Nutzer selbst
+  // eingetragen)? Nur dann darf die Aktualisierung ihn überschreiben.
+  const isAutoPrice = (item) => {
+    if (item.isCustom) return false;
+    const calc = parseFloat(calculatePrice(item, item.userCondition, item.userLanguage, item.userVariant || 'normal'));
+    return Math.abs(calc - (parseFloat(item.userPrice) || 0)) < 0.011;
+  };
+
+  // Holt aktuelle Cardmarket-Preise für alle Karten der Collection und Watchlist
+  // und schreibt sie per Batch nach Firestore. Selbst eingetragene Preise bleiben
+  // unverändert (nur die Cardmarket-Daten dahinter werden aufgefrischt).
+  const refreshPrices = async ({ silent = false } = {}) => {
+    if (!auth.currentUser || refreshing) return;
+    const uid = auth.currentUser.uid;
+    const ids = [...new Set([...collection, ...watchlist]
+      .map((c) => c.id)
+      .filter((id) => id && !String(id).startsWith('custom-')))];
+    if (ids.length === 0) {
+      if (!silent) setRefreshMsg('Keine Karten zum Aktualisieren vorhanden.');
+      return;
+    }
+
+    setRefreshing(true);
+    setRefreshMsg('Aktualisiere Preise … (der Server braucht nach Inaktivität evtl. bis zu einer Minute)');
+    try {
+      const fresh = {};
+      for (let i = 0; i < ids.length; i += 40) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 90000);
+        const res = await fetch(`${API_URL}/api/prices`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ ids: ids.slice(i, i + 40) })
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`Server antwortet mit Status ${res.status}`);
+        const data = await res.json();
+        Object.assign(fresh, data.prices || {});
+        setRefreshMsg(`Aktualisiere … ${Math.min(i + 40, ids.length)} / ${ids.length}`);
+      }
+
+      let batch = writeBatch(db);
+      let ops = 0, changedColl = 0, changedWatch = 0, keptManual = 0;
+      const flush = async () => { if (ops > 0) { await batch.commit(); batch = writeBatch(db); ops = 0; } };
+      const merged = (item, f) => ({
+        ...(item.cardmarket || {}),
+        prices: f.prices,
+        ...(f.productId ? { productId: f.productId } : {}),
+        priceSource: f.priceSource || 'tcgdex',
+        ...(f.priceDate ? { priceDate: f.priceDate } : {})
+      });
+
+      for (const item of collection) {
+        const f = fresh[item.id];
+        if (!f?.prices || !item.docId) continue;
+        // Keine guten alten Preise mit einer leeren Antwort überschreiben
+        if (!hasPrice(f.prices) && hasPrice(item.cardmarket?.prices)) continue;
+        const auto = isAutoPrice(item);
+        const cardmarket = merged(item, f);
+        const newPrice = auto
+          ? calculatePrice({ ...item, cardmarket }, item.userCondition, item.userLanguage, item.userVariant || 'normal')
+          : item.userPrice;
+        if (!auto) keptManual += 1;
+        if (samePrices(f.prices, item.cardmarket?.prices) && String(newPrice) === String(item.userPrice)) continue;
+        batch.update(doc(db, 'users', uid, 'collection', item.docId), { cardmarket, userPrice: newPrice, priceUpdatedAt: Date.now() });
+        ops += 1; changedColl += 1;
+        if (ops >= 400) await flush();
+      }
+
+      for (const card of watchlist) {
+        const f = fresh[card.id];
+        if (!f?.prices) continue;
+        if (!hasPrice(f.prices) && hasPrice(card.cardmarket?.prices)) continue;
+        if (samePrices(f.prices, card.cardmarket?.prices)) continue;
+        batch.update(doc(db, 'users', uid, 'watchlist', card.id), { cardmarket: merged(card, f), priceUpdatedAt: Date.now() });
+        ops += 1; changedWatch += 1;
+        if (ops >= 400) await flush();
+      }
+      await flush();
+
+      const now = Date.now();
+      saveSetting('lastPriceRefresh:' + uid, String(now));
+      setLastRefreshAt(now);
+      if (!silent) setToastMsg('Preise aktualisiert ✓');
+      const parts = [`${changedColl} Collection-Karten`, `${changedWatch} Watchlist-Karten`];
+      setRefreshMsg(
+        changedColl + changedWatch === 0
+          ? 'Alle Preise sind bereits aktuell. ✓'
+          : `Aktualisiert: ${parts.join(', ')}. ✓` + (keptManual ? ` ${keptManual} Karten mit eigenem Preis blieben unverändert.` : '')
+      );
+    } catch (err) {
+      console.error('Preis-Refresh fehlgeschlagen:', err);
+      if (!silent) {
+        setRefreshMsg(err.name === 'AbortError'
+          ? 'Der Server hat zu lange nicht geantwortet (Render-Gratisplan schläft nach Inaktivität ein). Bitte in ca. 1 Minute nochmal versuchen.'
+          : 'Aktualisierung fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+      } else {
+        setRefreshMsg('');
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  refreshRef.current = refreshPrices;
 
   const openEditCard = (item) => {
     setSelectedCard(item);
@@ -898,6 +1086,44 @@ export default function App() {
 
   const availableSets = ['Alle', ...new Set(collection.map(item => item.set?.name).filter(Boolean))];
 
+  // Watchlist: gleiche Regel wie in der Karten-Anzeige (Trend <= Zielpreis)
+  const isDealCard = (card) => {
+    const target = parseFloat(card.targetPrice) || 0;
+    const currentTrend = parseFloat(card.cardmarket?.prices?.trendPrice) || parseFloat(calculatePrice(card, 'Poor', CHEAPEST_LANG.name)) || 0;
+    return target > 0 && currentTrend <= target;
+  };
+  const dealCount = watchlist.filter(isDealCard).length;
+
+  // Einmal pro Sitzung automatisch Preise auffrischen (höchstens alle 12 Stunden)
+  useEffect(() => {
+    if (!isAuthenticated || !collectionReady || !watchlistReady || autoRefreshed.current) return;
+    autoRefreshed.current = true;
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    const last = Number(loadSetting('lastPriceRefresh:' + uid, '0')) || 0;
+    if (Date.now() - last < 12 * 60 * 60 * 1000) return;
+    setTimeout(() => { refreshRef.current && refreshRef.current({ silent: true }); }, 1500);
+  }, [isAuthenticated, collectionReady, watchlistReady]);
+
+  // Täglichen Wert-Snapshot speichern bzw. den heutigen aktualisieren, wenn sich der Wert ändert
+  useEffect(() => {
+    if (!isAuthenticated || !collectionReady || !snapshotsReady || snapshotsDenied || collection.length === 0) return;
+    const date = todayKey();
+    const value = Math.round(parseFloat(stats.median) * 100) / 100;
+    const existing = snapshots.find((s) => s.date === date);
+    if (existing && Math.abs(existing.value - value) < 0.005 && existing.pieces === totalPieces) return;
+    const t = setTimeout(() => {
+      if (!auth.currentUser) return;
+      setDoc(doc(db, 'users', auth.currentUser.uid, 'snapshots', date), {
+        date, ts: Date.now(), value, pieces: totalPieces, cards: collection.length, cost: Math.round(invest.cost * 100) / 100
+      }).catch((err) => {
+        console.warn('Snapshot speichern fehlgeschlagen:', err.code || err.message);
+        if (err.code === 'permission-denied') setSnapshotsDenied(true);
+      });
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [isAuthenticated, collectionReady, snapshotsReady, snapshotsDenied, stats.median, totalPieces, collection.length, snapshots]);
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-sm">
@@ -993,6 +1219,11 @@ export default function App() {
       <main className="max-w-4xl mx-auto p-4">
         {activeTab === 'profile' && (
           <div className="space-y-6 fade-in">
+            {dealCount > 0 && (
+              <button onClick={() => setActiveTab('watchlist')} className="w-full text-left bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-3 text-sm text-emerald-300 hover:bg-emerald-500/20 transition-colors">
+                🎯 {dealCount === 1 ? '1 Karte auf deiner Watchlist hat' : `${dealCount} Karten auf deiner Watchlist haben`} ihren Zielpreis erreicht – zur Watchlist
+              </button>
+            )}
             <div className="bg-slate-900 border border-cyan-500/30 p-6 rounded-2xl shadow-xl">
               <h2 className="text-xl font-black text-white mb-1">Willkommen zurück, {currentUser || 'Trainer'}</h2>
               <p className="text-slate-400 text-sm mb-6">Wert deiner Collection</p>
@@ -1026,6 +1257,15 @@ export default function App() {
                 <span className="font-bold text-cyan-400">{watchlist.length} Stück</span>
               </div>
             </div>
+
+            <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+              <h3 className="font-bold text-slate-100 text-sm mb-3">Wertverlauf deiner Collection</h3>
+              {snapshotsDenied ? (
+                <p className="text-xs text-amber-300">Der Verlauf kann nicht gespeichert werden. Bitte in der Firebase Console die Firestore-Regeln für {'users/{uid}/snapshots'} freigeben.</p>
+              ) : (
+                <ValueChart points={snapshots.map((s) => ({ date: s.date, value: s.value }))} />
+              )}
+            </div>
           </div>
         )}
 
@@ -1035,6 +1275,14 @@ export default function App() {
               {[['cards', '🎴 Karten'], ['sets', '📊 Sets'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`]].map(([key, label]) => (
                 <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
               ))}
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
+              <button onClick={() => refreshPrices()} disabled={refreshing} className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-xs font-black px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
+                {refreshing ? '⏳ Lädt …' : '🔄 Preise aktualisieren'}
+              </button>
+              <p className="text-[10px] text-slate-400 flex-1">
+                {refreshMsg || (lastRefreshAt ? `Zuletzt aktualisiert: ${formatAdded(lastRefreshAt)}` : 'Preise wurden noch nicht aktualisiert.')}
+              </p>
             </div>
 
             <div className={`bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md ${collectionView !== 'cards' ? 'hidden' : ''}`}>
@@ -1300,7 +1548,7 @@ export default function App() {
         <div className="max-w-md mx-auto flex justify-between items-center">
           <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">👤</span><span>Profil</span></button>
           <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🎴</span><span>Collection</span></button>
-          <button onClick={() => setActiveTab('watchlist')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">★</span><span>Watchlist</span></button>
+          <button onClick={() => setActiveTab('watchlist')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg relative">★{dealCount > 0 && <span className="absolute -top-1 -right-3 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full px-1 leading-4">{dealCount}</span>}</span><span>Watchlist</span></button>
           <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🔍</span><span>Suchen</span></button>
         </div>
       </nav>
