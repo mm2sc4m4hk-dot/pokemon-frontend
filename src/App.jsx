@@ -18,6 +18,8 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
+import { fetchPrices } from './priceData';
+import { CardHistoryChart, WeeklyMovers, PushToggle } from './Insights';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -554,6 +556,21 @@ export default function App() {
     }
   }, [toastMsg]);
 
+  // Klick auf eine Push-Nachricht: Kaltstart über ?tab=watchlist, offene App über Nachricht vom Service Worker
+  useEffect(() => {
+    const allowed = ['watchlist', 'profile', 'collection'];
+    const fromUrl = new URLSearchParams(window.location.search).get('tab');
+    if (allowed.includes(fromUrl)) setActiveTab(fromUrl);
+    if (!('serviceWorker' in navigator)) return undefined;
+    const onMsg = (e) => {
+      if (e.data?.type !== 'open-tab') return;
+      const t = new URL(e.data.url || '/', window.location.origin).searchParams.get('tab');
+      if (allowed.includes(t)) setActiveTab(t);
+    };
+    navigator.serviceWorker.addEventListener('message', onMsg);
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg);
+  }, []);
+
   // Firebase Auth & Firestore Listener
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
@@ -847,22 +864,11 @@ export default function App() {
     setRefreshing(true);
     setRefreshMsg('Aktualisiere Preise … (der Server braucht nach Inaktivität evtl. bis zu einer Minute)');
     try {
-      const fresh = {};
-      for (let i = 0; i < ids.length; i += 40) {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 90000);
-        const res = await fetch(`${API_URL}/api/prices`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({ ids: ids.slice(i, i + 40) })
-        });
-        clearTimeout(timeoutId);
-        if (!res.ok) throw new Error(`Server antwortet mit Status ${res.status}`);
-        const data = await res.json();
-        Object.assign(fresh, data.prices || {});
-        setRefreshMsg(`Aktualisiere … ${Math.min(i + 40, ids.length)} / ${ids.length}`);
-      }
+      // Erst die vom Server-Job vorbereiteten Preise aus Firestore (sofort, auch wenn der Render-Server
+      // schläft); nur Karten ohne frischen Eintrag gehen ans Backend.
+      const fresh = await fetchPrices(ids, API_URL, {
+        onProgress: (done, total) => setRefreshMsg(`Aktualisiere … ${done} / ${total}`)
+      });
 
       let batch = writeBatch(db);
       let ops = 0, changedColl = 0, changedWatch = 0, keptManual = 0;
@@ -1478,6 +1484,8 @@ export default function App() {
               )}
             </div>
 
+            {collection.length > 0 && <WeeklyMovers collection={collection} />}
+
             {collection.length > 0 && (
               <>
                 <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
@@ -1592,6 +1600,7 @@ export default function App() {
 
         {activeTab === 'watchlist' && (
           <div className="space-y-4 fade-in">
+            <PushToggle apiUrl={API_URL} />
             {todaysDrops.length > 0 && (
               <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
                 <h3 className="text-sm font-black text-emerald-300">📉 Heute günstiger geworden ({todaysDrops.length})</h3>
@@ -1862,6 +1871,12 @@ export default function App() {
                     </div>
                   );
                 })()}
+                {selectedCard.id && !String(selectedCard.id).startsWith('custom-') && (
+                  <div className="pt-1">
+                    <p className="text-[11px] text-slate-400 mb-1">Kurve seit Tracking-Start</p>
+                    <CardHistoryChart cardId={selectedCard.id} holo={!!VARIANTS.find(v => v.key === detailVariant)?.holo} />
+                  </div>
+                )}
               </div>
             )}
 

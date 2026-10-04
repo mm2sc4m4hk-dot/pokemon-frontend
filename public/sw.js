@@ -28,3 +28,30 @@ self.addEventListener('fetch', (event) => {
     fetch(event.request).catch(() => caches.match(event.request))
   );
 });
+
+// ---- Push-Nachrichten (Zielpreis-Alarm) ----
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; }
+  catch (e) { data = { title: 'PokéTracker', body: event.data ? event.data.text() : '' }; }
+
+  event.waitUntil(self.registration.showNotification(data.title || 'PokéTracker', {
+    body: data.body || '',
+    tag: data.tag || 'poketracker',
+    renotify: true,
+    // icon: '/icon-192.png',   // optional: Pfad zu deinem App-Icon
+    data: { url: data.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const w of wins) {
+      if ('focus' in w) { await w.focus(); w.postMessage({ type: 'open-tab', url }); return; }
+    }
+    await self.clients.openWindow(url);
+  })());
+});

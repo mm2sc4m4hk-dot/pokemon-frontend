@@ -16,6 +16,7 @@ import {
   onSnapshot
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
+import { MissingCost } from './Insights';
 
 // ---------------------------------------------------------------------
 // Kleine Helfer
@@ -836,6 +837,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   const [arrange, setArrange] = useState(false);        // Anordnen-Modus (Drag & Drop)
   const [drag, setDrag] = useState(null);                // { from, x, y, over }
   const [showMissing, setShowMissing] = useState(false); // Fehlt-Liste einblenden
+  const [missPrices, setMissPrices] = useState({}); // Kartenpreise der fehlenden Slots (für „Kosten bis komplett“)
   const [busyShare, setBusyShare] = useState(false);
   const [tick, setTick] = useState(0);
   const dragInfo = useRef(null);
@@ -1118,11 +1120,16 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
     if (slot) { if (!ownedIds.has(slot.id)) missing.push({ ...row, slot }); }
     else if (isDex && !dexOwned.has(dexOf(idx))) missing.push({ ...row, slot: null, dexNo: dexOf(idx) });
   }
+  const missingIds = missing.filter((m) => m.slot && !String(m.slot.id).startsWith('custom-')).map((m) => m.slot.id);
+  const unpickedCount = missing.filter((m) => !m.slot).length;
+  const missingTotal = missingIds.reduce((s, id) => s + (missPrices[id] || 0), 0);
+  const priceTag = (m) => (m.slot && missPrices[m.slot.id] > 0 ? ` – ${eur(missPrices[m.slot.id])}` : '');
   const missingLine = (m) => (m.slot
-    ? `S. ${m.pageNo} / Platz ${m.pos}: ${m.slot.name}${m.slot.setName ? ` (${m.slot.setName}${m.slot.localId ? ` #${m.slot.localId}` : ''})` : ''}`
+    ? `S. ${m.pageNo} / Platz ${m.pos}: ${m.slot.name}${m.slot.setName ? ` (${m.slot.setName}${m.slot.localId ? ` #${m.slot.localId}` : ''})` : ''}${priceTag(m)}`
     : `S. ${m.pageNo} / Platz ${m.pos}: #${pad(m.dexNo)} ${dexMap.get(m.dexNo)?.name || ''} (noch keine Karte gewählt)`);
   const copyMissing = async () => {
-    const text = `Fehlt-Liste „${b.name}“ (${missing.length})\n` + missing.map(missingLine).join('\n');
+    const text = `Fehlt-Liste „${b.name}“ (${missing.length})\n` + missing.map(missingLine).join('\n')
+      + (missingTotal > 0 ? `\nKosten bis komplett: ${eur(missingTotal)}` : '');
     try { await navigator.clipboard.writeText(text); setError(''); window.alert('Fehlt-Liste in die Zwischenablage kopiert.'); }
     catch (e) { window.prompt('Zum Kopieren markieren:', text); }
   };
@@ -1305,6 +1312,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
             </div>
           </div>
           {missing.length === 0 && <p className="text-xs text-emerald-400">Nichts fehlt – alle belegten Slots sind in deiner Collection. 🎉</p>}
+          <MissingCost ids={missingIds} api={api} prices={missPrices} onPrices={setMissPrices} unpicked={unpickedCount} />
           {Array.from(new Set(missing.map((m) => m.pageNo))).map((pn) => (
             <div key={pn}>
               <p className="text-[11px] font-bold text-slate-300 border-b border-slate-800 pb-1 mb-1">Seite {pn}</p>
@@ -1312,6 +1320,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
                 {missing.filter((m) => m.pageNo === pn).map((m) => (
                   <li key={m.idx} className="flex items-center justify-between gap-2 text-xs text-slate-300">
                     <span className="min-w-0 truncate"><span className="text-slate-500">Platz {m.pos}:</span> {m.slot ? <>{m.slot.name}{m.slot.setName ? <span className="text-slate-500"> · {m.slot.setName}{m.slot.localId ? ` #${m.slot.localId}` : ''}</span> : null}</> : <>#{pad(m.dexNo)} {dexMap.get(m.dexNo)?.name || ''} <span className="text-slate-500">· noch keine Karte gewählt</span></>}</span>
+                    {m.slot && missPrices[m.slot.id] > 0 && <span className="shrink-0 font-bold text-slate-200">{eur(missPrices[m.slot.id])}</span>}
                     {m.slot && !String(m.slot.id).startsWith('custom-') && <span className="no-print w-24 shrink-0"><WishBtn card={m.slot} watchIds={watchIds} onWish={onWish} /></span>}
                   </li>
                 ))}
