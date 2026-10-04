@@ -1056,23 +1056,52 @@ export default function App() {
     }
   };
 
-  // Karte aus der Artist-Ansicht in die Collection: vollständige Daten holen und das
-  // normale Hinzufügen-Fenster (Zustand, Sprache, Variante, Preis ...) öffnen.
+  // Kurzform einer Karte (aus Artist-/Binder-Ansicht) -> vollständige Karte inkl. Cardmarket-Preisen
+  const loadFullCard = async (brief) => {
+    if (brief.cardmarket) return brief;
+    if (String(brief.id).startsWith('cm-')) {
+      // Treffer, die nur aus der Cardmarket-Datei stammen: Preise über den Preis-Endpunkt holen
+      const res = await fetch(`${API_URL}/api/prices`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [brief.id] })
+      });
+      if (!res.ok) throw new Error('Status ' + res.status);
+      const f = (await res.json())?.prices?.[brief.id];
+      return {
+        ...brief,
+        images: brief.images || { small: brief.image || '' },
+        set: brief.set || { name: brief.setName || '' },
+        number: brief.number ?? brief.localId,
+        cardmarket: f ? { prices: f.prices, productId: f.productId, priceSource: f.priceSource, priceDate: f.priceDate } : undefined
+      };
+    }
+    const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
+    if (!res.ok) throw new Error('Status ' + res.status);
+    return res.json();
+  };
+
+  // Öffnet das normale Hinzufügen-Fenster (Zustand, Sprache, Variante, Preis, eigenes Foto ...).
+  // Steht die Karte auf der Watchlist, wird sie danach (abwählbar) von dort entfernt.
+  const beginAddToCollection = (card) => {
+    setSelectedCard(card);
+    setCardCondition(localStorage.getItem('lastCondition') || 'Near Mint');
+    setCardLanguage(localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
+    setCardVariant(getAvailableVariants(card)[0].key);
+    if (watchlistIds.has(card.id)) {
+      setMoveFromWatchlistId(card.id);
+      setRemoveFromWatchlistAfter(true);
+    } else {
+      setMoveFromWatchlistId(null);
+    }
+    setModalType('collection');
+  };
+
+  // Karte aus Artist-/Binder-Ansicht direkt in die Collection
   const addBriefToCollection = async (brief) => {
     if (!brief?.id) return;
     try {
-      let card = brief;
-      if (!brief.cardmarket) {
-        const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
-        if (!res.ok) throw new Error('Status ' + res.status);
-        card = await res.json();
-      }
-      setSelectedCard(card);
-      setCardCondition(localStorage.getItem('lastCondition') || 'Near Mint');
-      setCardLanguage(localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
-      setCardVariant(getAvailableVariants(card)[0].key);
-      setMoveFromWatchlistId(null);
-      setModalType('collection');
+      beginAddToCollection(await loadFullCard(brief));
     } catch (err) {
       alert('Karte konnte nicht geladen werden. Läuft der Server?');
     }
@@ -1083,30 +1112,7 @@ export default function App() {
   const openCardDetail = async (brief) => {
     if (!brief?.id) return;
     try {
-      let card = brief;
-      if (!brief.cardmarket) {
-        if (String(brief.id).startsWith('cm-')) {
-          // Treffer, die nur aus der Cardmarket-Datei stammen: Preise über den Preis-Endpunkt holen
-          const res = await fetch(`${API_URL}/api/prices`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ids: [brief.id] })
-          });
-          if (!res.ok) throw new Error('Status ' + res.status);
-          const f = (await res.json())?.prices?.[brief.id];
-          card = {
-            ...brief,
-            images: brief.images || { small: brief.image || '' },
-            set: brief.set || { name: brief.setName || '' },
-            number: brief.number ?? brief.localId,
-            cardmarket: f ? { prices: f.prices, productId: f.productId, priceSource: f.priceSource, priceDate: f.priceDate } : undefined
-          };
-        } else {
-          const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
-          if (!res.ok) throw new Error('Status ' + res.status);
-          card = await res.json();
-        }
-      }
+      const card = await loadFullCard(brief);
       setSelectedCard(card);
       setMoveFromWatchlistId(null);
       setModalType('detail');
@@ -1798,6 +1804,9 @@ export default function App() {
 
             <div className="flex gap-2 pt-2">
               <button onClick={() => { setModalType(null); setMoveFromWatchlistId(null); setEditOriginalPrice(''); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              {modalType === 'detail' && !selectedCard.docId && selectedCard.id && !String(selectedCard.id).startsWith('custom-') && (
+                <button onClick={() => beginAddToCollection(selectedCard)} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">➕ Collection</button>
+              )}
               {modalType === 'edit' && <button onClick={saveEdit} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">Speichern</button>}
               {modalType === 'collection' && <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">Hinzufügen</button>}
             </div>

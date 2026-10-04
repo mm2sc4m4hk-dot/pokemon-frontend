@@ -586,7 +586,7 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
 // ---------------------------------------------------------------------
 // BINDER: virtuelle Sammelalben (normal oder als Pokédex-Binder)
 // ---------------------------------------------------------------------
-export function BinderView({ api, collection, watchIds, onWish, onOpenCard, Img, meta }) {
+export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpenCard, Img, meta }) {
   const uid = auth.currentUser?.uid;
   const [binders, setBinders] = useState(null); // null = lädt
   const [selId, setSelId] = useState(null);
@@ -785,10 +785,11 @@ export function BinderView({ api, collection, watchIds, onWish, onOpenCard, Img,
             const item = byId.get(slot.id);
             // Fehlende Karte: Klick zeigt die Karte (Details + Preisverlauf), das ✎ öffnet wie bisher die Slot-Auswahl
             const viewOnClick = !have && !!onOpenCard;
-            const openDetail = async () => {
+            const runWith = async (fn) => {
               setOpening(idx);
-              try { await onOpenCard(slot); } finally { setOpening(null); }
+              try { await fn(slot); } finally { setOpening(null); }
             };
+            const openDetail = () => runWith(onOpenCard);
             return (
               <div key={i} className="relative w-full aspect-[5/7]">
                 <button onClick={viewOnClick ? openDetail : () => setSlotIdx(idx)} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
@@ -799,6 +800,9 @@ export function BinderView({ api, collection, watchIds, onWish, onOpenCard, Img,
                 </button>
                 {viewOnClick && (
                   <button onClick={(ev) => { ev.stopPropagation(); setSlotIdx(idx); }} title="Slot ändern oder leeren" className="absolute top-1 right-1 w-5 h-5 rounded-full bg-slate-950/80 text-cyan-400 text-[10px] font-bold border border-cyan-500/30 hover:bg-cyan-500 hover:text-slate-950 transition">✎</button>
+                )}
+                {viewOnClick && onAddColl && (
+                  <button onClick={(ev) => { ev.stopPropagation(); runWith(onAddColl); }} title="Habe ich jetzt – in die Collection" className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-cyan-500 text-slate-950 text-[10px] font-black border border-cyan-300 hover:bg-cyan-300 transition">＋</button>
                 )}
               </div>
             );
@@ -818,7 +822,7 @@ export function BinderView({ api, collection, watchIds, onWish, onOpenCard, Img,
           );
         })}
       </div>
-      {onOpenCard && <p className="text-[10px] text-slate-500 text-center">Tippe auf eine ausgegraute Karte („fehlt“), um sie mit Preisverlauf anzuzeigen. Mit dem ✎ änderst oder leerst du den Slot.</p>}
+      {onOpenCard && <p className="text-[10px] text-slate-500 text-center">Ausgegraute Karte („fehlt“): Tippen zeigt sie mit Preisverlauf, ＋ legt sie nach dem Kauf direkt in deine Collection (mit Foto-Upload), ✎ ändert oder leert den Slot.</p>}
       {isDex && <p className="text-[10px] text-slate-500 text-center">Grün umrandete Slots: Du hast bereits eine Karte dieses Pokémon – tippe auf den Slot, um sie einzusortieren.</p>}
 
       {slotIdx !== null && (isDex ? (
