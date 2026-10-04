@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { cleanName, parseNumber, buildQuery, coverRect } from './scanParse';
 import { watchPrice } from './priceData';
+import { OwnedBadge } from './Backup';
 
 // ---- gemeinsamer OCR-Worker (wird nach dem Schließen nach 60 s wieder freigegeben) ----
 let workerPromise = null;
@@ -133,7 +134,7 @@ async function loadImageSource(file) {
 
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 
-export default function CardScanner({ mode, onClose, onResult, onSearch, onPick, Img, series, onSeriesChange }) {
+export default function CardScanner({ mode, onClose, onResult, onSearch, onPick, Img, series, onSeriesChange, owned }) {
   const [phase, setPhase] = useState('camera'); // camera | reading | result
   const [camError, setCamError] = useState('');
   const [camReady, setCamReady] = useState(false);
@@ -369,6 +370,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
                       </p>
                       <p className="text-[10px] text-slate-400 truncate">{(card.set && card.set.name) || 'Unbekannt'}</p>
                       <p className="text-[11px] text-cyan-400 font-bold">{eur(watchPrice(card.cardmarket && card.cardmarket.prices))}</p>
+                      {owned && <OwnedBadge info={owned.get(card.id)} className="mt-1" />}
                     </button>
                   ))}
                 </div>

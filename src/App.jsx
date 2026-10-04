@@ -22,6 +22,7 @@ import { fetchPrices } from './priceData';
 import { CardHistoryChart, WeeklyMovers, PushToggle } from './Insights';
 import { CompletionPanel, BinderCompletion } from './Completion';
 import CardScanner from './CardScanner';
+import { SharePanel, BackupPanel, WantlistExport, SharedView, OwnedBadge, buildOwnedMap } from './Backup';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -548,6 +549,14 @@ export default function App() {
 
   const unsubscribers = useRef([]);
 
+  // Freigabe-Link: /?share=TOKEN zeigt die Sammlung nur lesend (ohne Anmeldung)
+  const shareToken = useMemo(() => {
+    const t = new URLSearchParams(window.location.search).get('share') || '';
+    return /^[A-Za-z0-9]{16,64}$/.test(t) ? t : '';
+  }, []);
+  // „Hast du schon“: Karten-ID -> Anzahl + Varianten in der Collection
+  const ownedMap = useMemo(() => buildOwnedMap(collection), [collection]);
+
   // Preis-Aktualisierung & Wertverlauf
   const [collectionReady, setCollectionReady] = useState(false);
   const [watchlistReady, setWatchlistReady] = useState(false);
@@ -581,7 +590,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setDetailVariant(selectedCard?.userVariant || 'normal');
+    setDetailVariant(selectedCard?.userVariant || getAvailableVariants(selectedCard)[0].key);
   }, [selectedCard]);
 
   // Toast Auto-Clear
@@ -628,11 +637,17 @@ export default function App() {
         const unsubColl = onSnapshot(collRef, (snap) => {
           setCollection(snap.docs.map((d) => ({ ...d.data(), docId: d.id, instanceId: d.id })));
           setCollectionReady(true);
+        }, (err) => {
+          console.warn('Collection nicht lesbar:', err.code);
+          setCollectionReady(true);
         });
 
         const watchRef = fsCollection(db, 'users', user.uid, 'watchlist');
         const unsubWatch = onSnapshot(watchRef, (snap) => {
           setWatchlist(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+          setWatchlistReady(true);
+        }, (err) => {
+          console.warn('Watchlist nicht lesbar:', err.code);
           setWatchlistReady(true);
         });
 
@@ -827,7 +842,12 @@ export default function App() {
   };
 
   const getSearchSelection = (cardId) =>
-    searchSelections[cardId] || { condition: cardCondition, language: cardLanguage, variant: 'normal' };
+    searchSelections[cardId] || {
+      condition: cardCondition,
+      language: cardLanguage,
+      // Erste wirklich vorhandene Variante (Holo-only-Karten hätten sonst Preis 0 €)
+      variant: getAvailableVariants(searchResults.find((c) => c.id === cardId))[0].key
+    };
 
   const updateSearchSelection = (cardId, patch) => {
     setSearchSelections(prev => ({
@@ -863,6 +883,8 @@ export default function App() {
     };
     delete newItem.docId;
     delete newItem.instanceId;
+    // Watchlist-Felder gehören nicht in die Collection
+    ['targetPrice', 'prevPrice', 'priceDay', 'alertedTarget', 'alertedAt', 'alertedPrice', 'priceUpdatedAt'].forEach((k) => { delete newItem[k]; });
     try {
       await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
       
@@ -1115,6 +1137,8 @@ export default function App() {
     if (!auth.currentUser) return;
     try {
       const cleanPrice = parseMoney(price);
+      const old = parseFloat(watchlist.find((c) => c.id === cardId)?.targetPrice) || 0;
+      if ((cleanPrice ? parseFloat(cleanPrice) : 0) === old) return; // nichts geändert
       await updateDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', cardId), {
         targetPrice: cleanPrice ? parseFloat(cleanPrice) : null
       });
@@ -1425,6 +1449,8 @@ export default function App() {
     meta: { needsMeta: needsMeta.length, busy: metaBusy, msg: metaMsg, onBackfill: backfillMeta }
   };
 
+  if (shareToken) return <SharedView token={shareToken} Img={CardImage} />;
+
   if (authLoading) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-sm">
@@ -1582,6 +1608,17 @@ export default function App() {
                 </div>
               </>
             )}
+
+            <SharePanel collection={collection} ready={collectionReady} />
+            <BackupPanel
+              collection={collection}
+              watchlist={watchlist}
+              api={API_URL}
+              conditions={CONDITIONS}
+              languages={LANGUAGES}
+              calculatePrice={calculatePrice}
+              isAutoPrice={isAutoPrice}
+            />
           </div>
         )}
 
@@ -1689,6 +1726,7 @@ export default function App() {
         {activeTab === 'watchlist' && (
           <div className="space-y-4 fade-in">
             <PushToggle apiUrl={API_URL} />
+            <WantlistExport watchlist={watchlist} api={API_URL} />
             {todaysDrops.length > 0 && (
               <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
                 <h3 className="text-sm font-black text-emerald-300">📉 Heute günstiger geworden ({todaysDrops.length})</h3>
@@ -1741,6 +1779,7 @@ export default function App() {
                       <div className="flex-1">
                         <CardTitle card={card} truncate={false} />
                         <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
+                        <OwnedBadge info={ownedMap.get(card.id)} className="mt-1" />
                         
                         <div className="flex items-center gap-2 mt-2">
                           <span className="text-[10px] text-slate-400">Zielpreis:</span>
@@ -1843,6 +1882,7 @@ export default function App() {
                     <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <CardTitle card={card} />
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
+                    <OwnedBadge info={ownedMap.get(card.id)} className="mt-1 self-start" />
 
                     <div className="flex flex-wrap gap-1 mt-2">
                       <select value={sel.condition} onChange={e => updateSearchSelection(card.id, { condition: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
@@ -1916,6 +1956,7 @@ export default function App() {
           onSearch={scanSearch}
           onPick={handleScanPick}
           Img={CardImage}
+          owned={ownedMap}
           series={scanSeries}
           onSeriesChange={(v) => { setScanSeries(v); saveSetting('scanSeries', v ? '1' : '0'); }}
         />
@@ -1929,6 +1970,7 @@ export default function App() {
               <div>
                 <CardTitle card={selectedCard} size="lg" truncate={false} />
                 <p className="text-sm text-slate-400">{selectedCard.set?.name || 'Unbekannt'}</p>
+                {modalType !== 'edit' && !selectedCard.docId && <OwnedBadge info={ownedMap.get(selectedCard.id)} className="mt-1" />}
                 <div className="mt-2 text-xs text-slate-300">Trend (Basis): <span className="text-cyan-400 font-bold">{selectedCard.cardmarket?.prices?.trendPrice || 0} €</span></div>
                 {selectedCard.cardmarket?.url && (
                   <a href={selectedCard.cardmarket.url} target="_blank" rel="noopener noreferrer" className="text-xs text-cyan-400 hover:underline mt-1 inline-block">Cardmarket ↗</a>
