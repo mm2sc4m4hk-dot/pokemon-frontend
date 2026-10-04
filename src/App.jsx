@@ -1078,6 +1078,43 @@ export default function App() {
     }
   };
 
+  // Karte aus dem Binder (z. B. ausgegrauter „fehlt“-Slot) anzeigen wie beim Anklicken in der Collection:
+  // vollständige Daten + Cardmarket-Preise holen und das Detail-Fenster mit Preisverlauf öffnen.
+  const openCardDetail = async (brief) => {
+    if (!brief?.id) return;
+    try {
+      let card = brief;
+      if (!brief.cardmarket) {
+        if (String(brief.id).startsWith('cm-')) {
+          // Treffer, die nur aus der Cardmarket-Datei stammen: Preise über den Preis-Endpunkt holen
+          const res = await fetch(`${API_URL}/api/prices`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: [brief.id] })
+          });
+          if (!res.ok) throw new Error('Status ' + res.status);
+          const f = (await res.json())?.prices?.[brief.id];
+          card = {
+            ...brief,
+            images: brief.images || { small: brief.image || '' },
+            set: brief.set || { name: brief.setName || '' },
+            number: brief.number ?? brief.localId,
+            cardmarket: f ? { prices: f.prices, productId: f.productId, priceSource: f.priceSource, priceDate: f.priceDate } : undefined
+          };
+        } else {
+          const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
+          if (!res.ok) throw new Error('Status ' + res.status);
+          card = await res.json();
+        }
+      }
+      setSelectedCard(card);
+      setMoveFromWatchlistId(null);
+      setModalType('detail');
+    } catch (err) {
+      alert('Karte konnte nicht geladen werden. Läuft der Server?');
+    }
+  };
+
   // Ältere Collection-Karten kennen ihre Pokédex-Nummer und ihren Artist noch nicht -> einmal nachladen
   const needsMeta = collection.filter((c) => c.id && c.dexId === undefined
     && !String(c.id).startsWith('custom-') && !String(c.id).startsWith('cm-'));
@@ -1217,6 +1254,7 @@ export default function App() {
     watchIds: watchlistIds,
     onWish: addBriefToWatchlist,
     onAddColl: addBriefToCollection,
+    onOpenCard: openCardDetail,
     Img: CardImage,
     meta: { needsMeta: needsMeta.length, busy: metaBusy, msg: metaMsg, onBackfill: backfillMeta }
   };

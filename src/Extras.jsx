@@ -586,7 +586,7 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
 // ---------------------------------------------------------------------
 // BINDER: virtuelle Sammelalben (normal oder als Pokédex-Binder)
 // ---------------------------------------------------------------------
-export function BinderView({ api, collection, watchIds, onWish, Img, meta }) {
+export function BinderView({ api, collection, watchIds, onWish, onOpenCard, Img, meta }) {
   const uid = auth.currentUser?.uid;
   const [binders, setBinders] = useState(null); // null = lädt
   const [selId, setSelId] = useState(null);
@@ -594,6 +594,7 @@ export function BinderView({ api, collection, watchIds, onWish, Img, meta }) {
   const [form, setForm] = useState({ name: '', type: 'cards', layout: '3×3', pages: 10, startDex: 1, dexCount: 151 });
   const [page, setPage] = useState(0);
   const [slotIdx, setSlotIdx] = useState(null);
+  const [opening, setOpening] = useState(null); // Slot, dessen Kartendetails gerade geladen werden
   const [error, setError] = useState('');
   const { ids: ownedIds, byId, dexOwned } = useOwned(collection);
 
@@ -782,12 +783,24 @@ export function BinderView({ api, collection, watchIds, onWish, Img, meta }) {
           if (slot) {
             const have = ownedIds.has(slot.id);
             const item = byId.get(slot.id);
+            // Fehlende Karte: Klick zeigt die Karte (Details + Preisverlauf), das ✎ öffnet wie bisher die Slot-Auswahl
+            const viewOnClick = !have && !!onOpenCard;
+            const openDetail = async () => {
+              setOpening(idx);
+              try { await onOpenCard(slot); } finally { setOpening(null); }
+            };
             return (
-              <button key={i} onClick={() => setSlotIdx(idx)} className="relative block w-full aspect-[5/7] rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
-                <Img src={(have && item?.customImage) || (have && item?.images?.small) || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : 'opacity-40 grayscale'}`} />
-                <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : 'fehlt'}</span>
-                {isDex && <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-950/80 text-slate-300 rounded px-1">#{pad(dexNo)}</span>}
-              </button>
+              <div key={i} className="relative w-full aspect-[5/7]">
+                <button onClick={viewOnClick ? openDetail : () => setSlotIdx(idx)} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
+                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : 'opacity-40 grayscale'}`} />
+                  <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : 'fehlt'}</span>
+                  {isDex && <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-950/80 text-slate-300 rounded px-1">#{pad(dexNo)}</span>}
+                  {opening === idx && <span className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-cyan-300 text-xs font-bold animate-pulse">Lade …</span>}
+                </button>
+                {viewOnClick && (
+                  <button onClick={(ev) => { ev.stopPropagation(); setSlotIdx(idx); }} title="Slot ändern oder leeren" className="absolute top-1 right-1 w-5 h-5 rounded-full bg-slate-950/80 text-cyan-400 text-[10px] font-bold border border-cyan-500/30 hover:bg-cyan-500 hover:text-slate-950 transition">✎</button>
+                )}
+              </div>
             );
           }
           const dexInfo = isDex ? dexMap.get(dexNo) : null;
@@ -805,6 +818,7 @@ export function BinderView({ api, collection, watchIds, onWish, Img, meta }) {
           );
         })}
       </div>
+      {onOpenCard && <p className="text-[10px] text-slate-500 text-center">Tippe auf eine ausgegraute Karte („fehlt“), um sie mit Preisverlauf anzuzeigen. Mit dem ✎ änderst oder leerst du den Slot.</p>}
       {isDex && <p className="text-[10px] text-slate-500 text-center">Grün umrandete Slots: Du hast bereits eine Karte dieses Pokémon – tippe auf den Slot, um sie einzusortieren.</p>}
 
       {slotIdx !== null && (isDex ? (
