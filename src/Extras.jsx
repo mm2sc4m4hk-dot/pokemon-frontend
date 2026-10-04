@@ -35,6 +35,40 @@ const toSlot = (c) => ({
   localId: String(c.number ?? c.localId ?? '')
 });
 
+// Sortierung: wird von der Collection UND vom Binder-Kartenwähler genutzt, damit beide exakt gleich sortieren
+export const SORT_OPTIONS = [
+  ['name-asc', 'Name (A–Z)'],
+  ['name-desc', 'Name (Z–A)'],
+  ['price-desc', 'Preis (absteigend)'],
+  ['price-asc', 'Preis (aufsteigend)'],
+  ['set-asc', 'Set (A–Z)'],
+  ['set-desc', 'Set (Z–A)'],
+  ['lang-asc', 'Sprache (A–Z)'],
+  ['lang-desc', 'Sprache (Z–A)'],
+  ['added-desc', 'Zuletzt hinzugefügt'],
+  ['added-asc', 'Zuerst hinzugefügt']
+];
+
+export function sortCollection(list, sortBy) {
+  return list.sort((a, b) => {
+    const nameA = a.name || ''; const nameB = b.name || '';
+    const setA = a.set?.name || ''; const setB = b.set?.name || '';
+    const langA = a.userLanguage || ''; const langB = b.userLanguage || '';
+
+    if (sortBy === 'name-asc') return nameA.localeCompare(nameB);
+    if (sortBy === 'name-desc') return nameB.localeCompare(nameA);
+    if (sortBy === 'price-desc') return (parseFloat(b.userPrice) || 0) - (parseFloat(a.userPrice) || 0);
+    if (sortBy === 'price-asc') return (parseFloat(a.userPrice) || 0) - (parseFloat(b.userPrice) || 0);
+    if (sortBy === 'set-asc') return setA.localeCompare(setB);
+    if (sortBy === 'set-desc') return setB.localeCompare(setA);
+    if (sortBy === 'lang-asc') return langA.localeCompare(langB);
+    if (sortBy === 'lang-desc') return langB.localeCompare(langA);
+    if (sortBy === 'added-desc') return (b.addedAt || 0) - (a.addedAt || 0);
+    if (sortBy === 'added-asc') return (a.addedAt || 0) - (b.addedAt || 0);
+    return 0;
+  });
+}
+
 // Einfacher JSON-Abruf mit Zwischenspeicher (gleiche Anfrage nur einmal pro Sitzung)
 const memo = new Map();
 function getJson(api, path) {
@@ -145,6 +179,20 @@ function WishBtn({ card, watchIds, onWish }) {
   );
 }
 
+function CollBtn({ card, onAddColl }) {
+  const [busy, setBusy] = useState(false);
+  if (!onAddColl) return null;
+  return (
+    <button
+      disabled={busy}
+      onClick={async (e) => { e.stopPropagation(); setBusy(true); try { await onAddColl(card); } finally { setBusy(false); } }}
+      className="w-full text-[10px] font-bold rounded-md py-1 border transition-colors text-cyan-300 border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500 hover:text-slate-950 disabled:opacity-70"
+    >
+      {busy ? '…' : '➕ Collection'}
+    </button>
+  );
+}
+
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
@@ -162,7 +210,7 @@ function Modal({ title, onClose, children }) {
 // ---------------------------------------------------------------------
 // ARTIST: alle Karten eines Zeichners, nach Sets gruppiert, mit Fehlend-Filter
 // ---------------------------------------------------------------------
-export function ArtistView({ api, collection, watchIds, onWish, Img, meta }) {
+export function ArtistView({ api, collection, watchIds, onWish, onAddColl, Img, meta }) {
   const names = useJson(api, '/api/illustrators');
   const [query, setQuery] = useState('');
   const [artist, setArtist] = useState('');
@@ -264,6 +312,7 @@ export function ArtistView({ api, collection, watchIds, onWish, Img, meta }) {
                         {have && <span className="absolute top-1 right-1 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full px-1.5">✓</span>}
                       </div>
                       <p className="text-[9px] text-slate-500 truncate">#{c.localId} {c.name}</p>
+                      {!have && <CollBtn card={c} onAddColl={onAddColl} />}
                       {!have && <WishBtn card={c} watchIds={watchIds} onWish={onWish} />}
                     </div>
                   );
@@ -438,18 +487,28 @@ export function PokedexView({ api, collection, watchIds, onWish, Img, meta }) {
 function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current, onPick, onClear, onClose }) {
   const [tab, setTab] = useState('mine');
   const [q, setQ] = useState('');
+  const [sortBy, setSortBy] = useState('name-asc');
   const [sq, setSq] = useState('');
   const [res, setRes] = useState({ loading: false, error: '', cards: null });
 
   const mine = useMemo(() => {
-    const seen = new Set();
-    const out = [];
-    collection.forEach((c) => { if (c.id && !seen.has(c.id)) { seen.add(c.id); out.push(c); } });
     const t = q.trim().toLowerCase();
-    return out
-      .filter((c) => !t || `${c.name} ${c.set?.name || ''} ${c.number || ''}`.toLowerCase().includes(t))
-      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }, [collection, q]);
+    const filtered = collection
+      .filter((c) => c.id)
+      .filter((c) => !t || `${c.name} ${c.set?.name || ''} ${c.number || ''}`.toLowerCase().includes(t));
+    // erst sortieren, dann doppelte Karten-IDs entfernen -> es bleibt jeweils die Kopie, die in der Sortierung vorne steht
+    const seen = new Set();
+    return sortCollection(filtered, sortBy).filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
+  }, [collection, q, sortBy]);
+
+  // kleine Zusatzzeile unter der Karte passend zur gewählten Sortierung
+  const sortInfo = (c) => {
+    if (sortBy.startsWith('price')) return eur(c.userPrice);
+    if (sortBy.startsWith('added')) return c.addedAt ? new Date(c.addedAt).toLocaleDateString('de-DE') : '–';
+    if (sortBy.startsWith('lang')) return String(c.userLanguage || '–').split(' ')[0];
+    if (sortBy.startsWith('set')) return c.set?.name || '–';
+    return '';
+  };
 
   const search = async (e) => {
     e.preventDefault();
@@ -479,12 +538,16 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
       {tab === 'mine' ? (
         <>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filtern nach Name, Set oder Nummer …" className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="w-full bg-slate-950 text-xs border border-slate-700 rounded-lg p-2 text-slate-300">
+            {SORT_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+          </select>
           {mine.length === 0 && <p className="text-xs text-slate-500">Keine Karten gefunden.</p>}
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
             {mine.slice(0, 120).map((c) => (
               <button key={c.id} onClick={() => onPick(toSlot(c))} className="text-left space-y-1 hover:opacity-80">
                 <Img src={c.customImage || c.images?.small} alt={c.name} className={`w-full rounded-md ${current?.id === c.id ? 'ring-2 ring-cyan-400' : ''}`} />
                 <p className="text-[9px] text-slate-500 truncate">{plain(c.name)}</p>
+                {sortInfo(c) && <p className="text-[9px] text-cyan-400 font-bold truncate">{sortInfo(c)}</p>}
               </button>
             ))}
           </div>

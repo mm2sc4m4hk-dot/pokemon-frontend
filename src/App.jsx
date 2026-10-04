@@ -17,7 +17,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { ArtistView, PokedexView, BinderView } from './Extras';
+import { ArtistView, PokedexView, BinderView, SORT_OPTIONS, sortCollection } from './Extras';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -1056,6 +1056,28 @@ export default function App() {
     }
   };
 
+  // Karte aus der Artist-Ansicht in die Collection: vollständige Daten holen und das
+  // normale Hinzufügen-Fenster (Zustand, Sprache, Variante, Preis ...) öffnen.
+  const addBriefToCollection = async (brief) => {
+    if (!brief?.id) return;
+    try {
+      let card = brief;
+      if (!brief.cardmarket) {
+        const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
+        if (!res.ok) throw new Error('Status ' + res.status);
+        card = await res.json();
+      }
+      setSelectedCard(card);
+      setCardCondition(localStorage.getItem('lastCondition') || 'Near Mint');
+      setCardLanguage(localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
+      setCardVariant(getAvailableVariants(card)[0].key);
+      setMoveFromWatchlistId(null);
+      setModalType('collection');
+    } catch (err) {
+      alert('Karte konnte nicht geladen werden. Läuft der Server?');
+    }
+  };
+
   // Ältere Collection-Karten kennen ihre Pokédex-Nummer und ihren Artist noch nicht -> einmal nachladen
   const needsMeta = collection.filter((c) => c.id && c.dexId === undefined
     && !String(c.id).startsWith('custom-') && !String(c.id).startsWith('cm-'));
@@ -1136,23 +1158,7 @@ export default function App() {
     if (filterLang !== 'Alle') list = list.filter(i => i.userLanguage === filterLang);
     if (filterSet !== 'Alle') list = list.filter(i => i.set?.name === filterSet);
 
-    list.sort((a, b) => {
-      const nameA = a.name || ''; const nameB = b.name || '';
-      const setA = a.set?.name || ''; const setB = b.set?.name || '';
-      const langA = a.userLanguage || ''; const langB = b.userLanguage || '';
-
-      if (sortBy === 'name-asc') return nameA.localeCompare(nameB);
-      if (sortBy === 'name-desc') return nameB.localeCompare(nameA);
-      if (sortBy === 'price-desc') return (parseFloat(b.userPrice) || 0) - (parseFloat(a.userPrice) || 0);
-      if (sortBy === 'price-asc') return (parseFloat(a.userPrice) || 0) - (parseFloat(b.userPrice) || 0);
-      if (sortBy === 'set-asc') return setA.localeCompare(setB);
-      if (sortBy === 'set-desc') return setB.localeCompare(setA);
-      if (sortBy === 'lang-asc') return langA.localeCompare(langB);
-      if (sortBy === 'lang-desc') return langB.localeCompare(langA);
-      if (sortBy === 'added-desc') return (b.addedAt || 0) - (a.addedAt || 0);
-      if (sortBy === 'added-asc') return (a.addedAt || 0) - (b.addedAt || 0);
-      return 0;
-    });
+    sortCollection(list, sortBy);
     return list;
   }, [collection, collectionSearch, filterLang, filterSet, sortBy]);
 
@@ -1210,6 +1216,7 @@ export default function App() {
     collection,
     watchIds: watchlistIds,
     onWish: addBriefToWatchlist,
+    onAddColl: addBriefToCollection,
     Img: CardImage,
     meta: { needsMeta: needsMeta.length, busy: metaBusy, msg: metaMsg, onBackfill: backfillMeta }
   };
@@ -1396,16 +1403,7 @@ export default function App() {
                 {availableSets.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
               <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="bg-slate-950 text-xs border border-slate-800 rounded-lg p-2 text-slate-300 md:col-span-2">
-                <option value="name-asc">Name (A–Z)</option>
-                <option value="name-desc">Name (Z–A)</option>
-                <option value="price-desc">Preis (absteigend)</option>
-                <option value="price-asc">Preis (aufsteigend)</option>
-                <option value="set-asc">Set (A–Z)</option>
-                <option value="set-desc">Set (Z–A)</option>
-                <option value="lang-asc">Sprache (A–Z)</option>
-                <option value="lang-desc">Sprache (Z–A)</option>
-                <option value="added-desc">Zuletzt hinzugefügt</option>
-                <option value="added-asc">Zuerst hinzugefügt</option>
+                {SORT_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
               </select>
             </div>
 
