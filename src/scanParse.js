@@ -19,7 +19,9 @@ export function cleanName(text) {
     const hp = words.findIndex((w) => /^(hp|kp)$/i.test(w));
     if (hp > 0) words = words.slice(0, hp);
     while (words.length > 1 && /^\d{2,3}$/.test(words[words.length - 1])) words.pop(); // HP-Zahl am Ende
-    const cand = words.join(' ').replace(/^[-.:'’ ]+|[-.:'’ ]+$/g, '');
+    let cand = words.join(' ').replace(/^[-.:'’ ]+|[-.:'’ ]+$/g, '');
+    // OCR liest das Stufen-Symbol oft als einzelnen Großbuchstaben vor dem Namen ("EGlumanda")
+    cand = cand.replace(/^[A-Z](?=[A-Z][a-zà-ÿ]{2,})/, '');
     const letters = (cand.match(/[A-Za-zÀ-ÿ]/g) || []).length;
     if (letters > bestLetters) { best = cand; bestLetters = letters; }
   }

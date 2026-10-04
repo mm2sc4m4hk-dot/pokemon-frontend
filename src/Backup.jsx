@@ -596,7 +596,7 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
 // ---------------------------------------------------------------------
 export function WantlistExport({ watchlist, api }) {
   const [open, setOpen] = useState(false);
-  const [withSet, setWithSet] = useState(true);
+  const [withSet, setWithSet] = useState(false);
   const [busy, setBusy] = useState(false);
   const [names, setNames] = useState(null); // id -> { name, set }
   const [msg, setMsg] = useState('');
@@ -634,7 +634,11 @@ export function WantlistExport({ watchlist, api }) {
     const rows = watchlist.map((c) => {
       const n = names[c.id];
       const isCm = String(c.id).startsWith('cm-');
-      const name = n?.name || (isCm ? String(c.name || '') : plain(c.name));
+      let name = n?.name || (isCm ? String(c.name || '') : plain(c.name));
+      // Cardmarket nimmt Pokémon-Karten nur mit Name + Fähigkeiten + Angriffen an (z. B. "Umbreon ex Moon Mirage Onyx")
+      const extra = n ? [...(n.abilities || []), ...(n.attacks || [])] : [];
+      if (extra.length) name = `${name} ${extra.join(' ')}`;
+      else if (isCm) { const m = name.match(/^([^\[]*?)\s*\[(.*)\]\s*$/); if (m) name = `${m[1]} ${m[2].split('|').map((a) => a.trim()).join(' ')}`; }
       const rawSet = n?.set || c.set?.name || '';
       const set = /^Cardmarket-Set /.test(rawSet) ? '' : rawSet;
       return { name, set };

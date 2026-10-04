@@ -1272,7 +1272,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
                 className={`relative w-full aspect-[5/7] ${arrange ? 'select-none' : ''} ${drag && drag.from === idx ? 'opacity-30' : ''} ${drag && drag.over === idx && drag.over !== drag.from ? 'ring-2 ring-cyan-400 rounded-md' : ''}`}
               >
                 <button onClick={arrange ? undefined : (viewOnClick ? openDetail : () => setSlotIdx(idx))} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
-                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || photo || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : photo ? 'opacity-90' : 'opacity-40 grayscale'}`} />
+                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || photo || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : 'opacity-40 grayscale'}`} />
                   <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : photo ? 'fehlt 📷' : 'fehlt'}</span>
                   {isDex && <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-950/80 text-slate-300 rounded px-1">#{pad(dexNo)}</span>}
                   {opening === idx && <span className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-cyan-300 text-xs font-bold animate-pulse">Lade …</span>}
