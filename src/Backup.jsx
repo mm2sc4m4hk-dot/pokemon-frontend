@@ -18,6 +18,7 @@ import { toCsv, parseCsv, downloadText } from './csvTools';
 
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const plain = (name) => String(name || '').replace(/\s*\[.*\]\s*$/, '');
+const gradeText = (c) => (c && c.userGrade && c.userGrade.company && c.userGrade.grade ? `${c.userGrade.company} ${c.userGrade.grade}` : '');
 const qtyOf = (it) => Math.max(1, parseInt(it?.userQuantity, 10) || 1);
 const isReal = (id) => !!id && !String(id).startsWith('custom-');
 const VARIANT_LABEL = { normal: 'Normal', reverse: 'Reverse Holo', holo: 'Holo', firstEdition: '1st Edition' };
@@ -80,7 +81,7 @@ function buildShareItems(collection, showPrices) {
       no: c.number || '',
       im: /^https?:/.test(img) ? img : '',
       v: c.userVariant || 'normal',
-      c: c.userCondition || '',
+      c: gradeText(c) || c.userCondition || '',
       l: String(c.userLanguage || '').split(' ')[0],
       q: qtyOf(c)
     };
@@ -91,10 +92,28 @@ function buildShareItems(collection, showPrices) {
   return items;
 }
 
-async function pushShare(uid, share, items) {
+// Wunschliste für Freunde: nur Name, Set, Bild und (optional) der Cardmarket-Trend – KEINE Zielpreise
+function buildWishItems(watchlist, showPrices) {
+  const items = (watchlist || []).filter((c) => c && c.id).map((c) => {
+    const img = c.images?.small || '';
+    const pr = c.cardmarket?.prices || {};
+    const o = { i: c.id, n: plain(c.name), s: c.set?.name || '', no: c.number || '', im: /^https?:/.test(img) ? img : '' };
+    if (showPrices) o.p = pr.trendPrice || pr.averageSellPrice || pr.trendPriceHolo || pr.avg1Holo || 0;
+    return o;
+  });
+  items.sort((a, b) => a.n.localeCompare(b.n) || a.s.localeCompare(b.s) || a.i.localeCompare(b.i));
+  return items;
+}
+
+// Wunsch-Teile liegen in derselben Unter-Sammlung wie die Sammlung ("parts"), aber mit den IDs w0, w1, ...
+// -> keine neuen Firestore-Regeln nötig.
+async function pushShare(uid, share, items, wish = []) {
   const capped = items.slice(0, PART_SIZE * MAX_PARTS);
   const parts = [];
   for (let i = 0; i < capped.length; i += PART_SIZE) parts.push(capped.slice(i, i + PART_SIZE));
+  const cappedW = wish.slice(0, PART_SIZE * 10);
+  const wparts = [];
+  for (let i = 0; i < cappedW.length; i += PART_SIZE) wparts.push(cappedW.slice(i, i + PART_SIZE));
   const showPrices = share.showPrices !== false;
   const pieces = capped.reduce((s, it) => s + it.q, 0);
   const value = showPrices ? Math.round(capped.reduce((s, it) => s + (it.p || 0) * it.q, 0) * 100) / 100 : null;
@@ -106,18 +125,24 @@ async function pushShare(uid, share, items) {
     pieces,
     value,
     parts: parts.length,
+    showCollection: share.showCollection !== false,
+    showWishlist: !!share.showWishlist,
+    wishCount: cappedW.length,
+    wishParts: wparts.length,
     createdAt: share.createdAt || Date.now(),
     updatedAt: Date.now()
   };
   const batch = writeBatch(db);
   batch.set(doc(db, 'shares', share.token), meta);
   parts.forEach((p, i) => batch.set(doc(db, 'shares', share.token, 'parts', String(i)), { items: p }));
+  wparts.forEach((p, i) => batch.set(doc(db, 'shares', share.token, 'parts', `w${i}`), { items: p }));
   for (let i = parts.length; i < (share.parts || 0); i += 1) batch.delete(doc(db, 'shares', share.token, 'parts', String(i)));
+  for (let i = wparts.length; i < (share.wishParts || 0); i += 1) batch.delete(doc(db, 'shares', share.token, 'parts', `w${i}`));
   await batch.commit();
   return meta;
 }
 
-export function SharePanel({ collection, ready }) {
+export function SharePanel({ collection, watchlist = [], ready }) {
   const uid = auth.currentUser?.uid;
   const [share, setShare] = useState(undefined); // undefined = lädt, null = keine Freigabe
   const [busy, setBusy] = useState(false);
@@ -144,8 +169,11 @@ export function SharePanel({ collection, ready }) {
   }, [uid]);
 
   const showPrices = share ? share.showPrices !== false : true;
-  const items = useMemo(() => buildShareItems(collection, showPrices), [collection, showPrices]);
-  const sig = useMemo(() => JSON.stringify(items), [items]);
+  const showCollection = share ? share.showCollection !== false : true;
+  const showWishlist = share ? !!share.showWishlist : false;
+  const items = useMemo(() => (showCollection ? buildShareItems(collection, showPrices) : []), [collection, showPrices, showCollection]);
+  const wishItems = useMemo(() => (showWishlist ? buildWishItems(watchlist, showPrices) : []), [watchlist, showPrices, showWishlist]);
+  const sig = useMemo(() => JSON.stringify([items, wishItems]), [items, wishItems]);
 
   // Änderungen automatisch übernehmen (nach 5 s Ruhe), solange die App offen ist
   useEffect(() => {
@@ -154,7 +182,7 @@ export function SharePanel({ collection, ready }) {
     if (lastSig.current === sig) return undefined;
     const t = setTimeout(async () => {
       try {
-        const meta = await pushShare(uid, share, items);
+        const meta = await pushShare(uid, share, items, wishItems);
         lastSig.current = sig;
         setShare((s) => (s ? { ...s, ...meta } : s));
       } catch (e) {
@@ -165,16 +193,25 @@ export function SharePanel({ collection, ready }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, share && share.token, ready]);
 
+  // Baut die zu teilenden Listen passend zu den Schaltern des Links
+  const build = (s) => {
+    const sp = s.showPrices !== false;
+    return {
+      its: s.showCollection !== false ? buildShareItems(collection, sp) : [],
+      wish: s.showWishlist ? buildWishItems(watchlist, sp) : []
+    };
+  };
+
   const link = share ? `${window.location.origin}/?share=${share.token}` : '';
 
   const create = async () => {
     if (!uid || busy) return;
     setBusy(true); setMsg('');
     try {
-      const fresh = { token: randomToken(), showPrices: true, parts: 0, createdAt: Date.now() };
-      const its = buildShareItems(collection, true);
-      const meta = await pushShare(uid, fresh, its);
-      lastSig.current = JSON.stringify(its);
+      const fresh = { token: randomToken(), showPrices: true, showCollection: true, showWishlist: true, parts: 0, wishParts: 0, createdAt: Date.now() };
+      const b = build(fresh);
+      const meta = await pushShare(uid, fresh, b.its, b.wish);
+      lastSig.current = JSON.stringify([b.its, b.wish]);
       setShare({ ...fresh, ...meta });
       setMsg('Link erstellt. ✓');
     } catch (e) {
@@ -186,9 +223,9 @@ export function SharePanel({ collection, ready }) {
     if (!next || busy) return;
     setBusy(true); setMsg('');
     try {
-      const its = buildShareItems(collection, next.showPrices !== false);
-      const meta = await pushShare(uid, next, its);
-      lastSig.current = JSON.stringify(its);
+      const b = build(next);
+      const meta = await pushShare(uid, next, b.its, b.wish);
+      lastSig.current = JSON.stringify([b.its, b.wish]);
       setShare({ ...next, ...meta });
       setMsg('Freigabe ist aktuell. ✓');
     } catch (e) {
@@ -197,6 +234,7 @@ export function SharePanel({ collection, ready }) {
   };
 
   const togglePrices = () => refresh({ ...share, showPrices: !showPrices });
+  const toggleFlag = (key, cur) => refresh({ ...share, [key]: !cur });
 
   const remove = async () => {
     if (!share || busy) return;
@@ -206,6 +244,7 @@ export function SharePanel({ collection, ready }) {
       // Erst die Teile (Regel prüft den Besitzer am noch vorhandenen Hauptdokument), dann das Hauptdokument
       const batch = writeBatch(db);
       for (let i = 0; i < (share.parts || 0); i += 1) batch.delete(doc(db, 'shares', share.token, 'parts', String(i)));
+      for (let i = 0; i < (share.wishParts || 0); i += 1) batch.delete(doc(db, 'shares', share.token, 'parts', `w${i}`));
       await batch.commit();
       const last = writeBatch(db);
       last.delete(doc(db, 'shares', share.token));
@@ -249,8 +288,16 @@ export function SharePanel({ collection, ready }) {
             <input type="checkbox" checked={showPrices} disabled={busy} onChange={togglePrices} className="accent-cyan-500" />
             Preise und Gesamtwert im Link anzeigen
           </label>
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input type="checkbox" checked={showCollection} disabled={busy} onChange={() => toggleFlag('showCollection', showCollection)} className="accent-cyan-500" />
+            Sammlung zeigen
+          </label>
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input type="checkbox" checked={showWishlist} disabled={busy} onChange={() => toggleFlag('showWishlist', showWishlist)} className="accent-cyan-500" />
+            🎁 Wunschliste zeigen (Geschenkideen für Freunde, ohne deine Zielpreise)
+          </label>
           <p className="text-[10px] text-slate-500">
-            {share.count ?? 0} Einträge geteilt{share.updatedAt ? ` · Stand ${new Date(share.updatedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}. Änderungen werden automatisch übernommen, solange die App offen ist.
+            {share.count ?? 0} Einträge{share.wishCount ? ` + ${share.wishCount} Wünsche` : ''} geteilt{share.updatedAt ? ` · Stand ${new Date(share.updatedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}. Änderungen werden automatisch übernommen, solange die App offen ist.
           </p>
           <div className="flex gap-4 text-xs">
             <button onClick={() => refresh()} disabled={busy} className="text-cyan-400 font-bold hover:underline disabled:opacity-50">Jetzt aktualisieren</button>
@@ -271,6 +318,7 @@ export function SharedView({ token, Img }) {
   const [q, setQ] = useState('');
   const [sortBy, setSortBy] = useState('name');
   const [limitN, setLimitN] = useState(120);
+  const [tab, setTab] = useState('coll');
 
   useEffect(() => {
     let alive = true;
@@ -281,7 +329,9 @@ export function SharedView({ token, Img }) {
         const meta = metaSnap.data();
         const snaps = await Promise.all(Array.from({ length: meta.parts || 0 }, (_, i) => getDoc(doc(db, 'shares', token, 'parts', String(i)))));
         const items = snaps.flatMap((s) => (s.exists() ? s.data().items || [] : []));
-        if (alive) setState({ loading: false, error: '', meta, items });
+        const wsnaps = await Promise.all(Array.from({ length: meta.wishParts || 0 }, (_, i) => getDoc(doc(db, 'shares', token, 'parts', `w${i}`))));
+        const wish = wsnaps.flatMap((s) => (s.exists() ? s.data().items || [] : []));
+        if (alive) setState({ loading: false, error: '', meta, items, wish });
       } catch (e) {
         if (alive) setState({ loading: false, meta: null, items: [], error: e.message === 'missing' || e.code === 'permission-denied' ? 'Dieser Link ist ungültig oder wurde deaktiviert.' : 'Die Sammlung konnte nicht geladen werden.' });
       }
@@ -290,6 +340,10 @@ export function SharedView({ token, Img }) {
   }, [token]);
 
   const { meta, items } = state;
+  const wish = state.wish || [];
+  const hasColl = items.length > 0;
+  const hasWish = wish.length > 0;
+  const view = tab === 'wish' && hasWish ? 'wish' : (hasColl ? 'coll' : 'wish');
   const hasPrices = !!meta?.showPrices;
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -316,7 +370,7 @@ export function SharedView({ token, Img }) {
             <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-5 shadow-xl">
               <h1 className="text-xl font-black text-white">Sammlung von {meta.owner || 'Trainer'}</h1>
               <p className="text-xs text-slate-400 mt-1">Nur Ansicht · Stand {meta.updatedAt ? new Date(meta.updatedAt).toLocaleString('de-DE') : '–'}</p>
-              <div className="mt-4 grid grid-cols-2 gap-3 text-center">
+              <div className={'mt-4 grid grid-cols-2 gap-3 text-center' + (hasColl ? '' : ' hidden')}>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
                   <p className="text-[10px] text-slate-400 uppercase tracking-wider">Karten</p>
                   <p className="text-lg font-black text-cyan-300">{meta.pieces ?? items.length}</p>
@@ -330,6 +384,34 @@ export function SharedView({ token, Img }) {
               </div>
             </div>
 
+            {hasColl && hasWish && (
+              <div className="flex gap-2">
+                {[['coll', '🎴 Sammlung'], ['wish', '🎁 Wunschliste']].map(([k, l]) => (
+                  <button key={k} onClick={() => setTab(k)} className={`flex-1 py-2 rounded-lg text-xs font-bold border ${view === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>{l}</button>
+                ))}
+              </div>
+            )}
+
+            {view === 'wish' && (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-400">🎁 Diese Karten fehlen {meta.owner || 'Trainer'} noch – Geschenkideen. Bitte kurz absprechen, damit nichts doppelt gekauft wird.</p>
+                {!hasWish && <p className="text-center text-slate-500 text-sm py-10">Die Wunschliste ist leer.</p>}
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                  {wish.map((it, idx) => (
+                    <div key={`${it.i}-${idx}`} className="bg-slate-900 border border-slate-800 rounded-xl p-2.5 shadow-lg">
+                      <Img src={it.im} alt={it.n} className="w-full rounded-lg mb-2" />
+                      <p className="text-xs font-bold text-slate-200 truncate">{it.n}{it.no ? <span className="text-slate-500 font-normal"> #{it.no}</span> : null}</p>
+                      <p className="text-[10px] text-slate-400 truncate">{it.s || 'Unbekanntes Set'}</p>
+                      {hasPrices && it.p > 0 && <p className="text-xs text-cyan-400 font-bold mt-1">ca. {eur(it.p)}</p>}
+                      <a href={`https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent([it.n, it.no].filter(Boolean).join(' '))}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-slate-500 hover:text-cyan-400 underline">Cardmarket ↗</a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {view === 'coll' && (
+            <>
             <div className="grid grid-cols-2 gap-2">
               <input value={q} onChange={(e) => { setQ(e.target.value); setLimitN(120); }} placeholder="Suchen (Name, Set, Nummer)" className="col-span-2 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-2.5 text-sm outline-none" />
               <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="col-span-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-300">
@@ -358,6 +440,8 @@ export function SharedView({ token, Img }) {
             {shown.length > limitN && (
               <button onClick={() => setLimitN((n) => n + 120)} className="w-full text-xs font-bold text-cyan-400 border border-slate-700 rounded-lg py-2 hover:bg-slate-800">Mehr anzeigen ({shown.length - limitN} weitere)</button>
             )}
+            </>
+            )}
           </>
         )}
       </main>
@@ -368,11 +452,18 @@ export function SharedView({ token, Img }) {
 // ---------------------------------------------------------------------
 // CSV-Backup: Export + Import (Collection und Watchlist in einer Datei)
 // ---------------------------------------------------------------------
-const COLS = ['liste', 'id', 'name', 'nummer', 'set', 'set_id', 'set_gesamt', 'anzahl', 'zustand', 'sprache', 'variante', 'preis', 'preis_manuell', 'einkaufspreis', 'verkauf', 'zielpreis', 'bild', 'hinzugefuegt'];
+const COLS = ['liste', 'id', 'name', 'nummer', 'set', 'set_id', 'set_gesamt', 'anzahl', 'zustand', 'sprache', 'variante', 'preis', 'preis_manuell', 'einkaufspreis', 'verkauf', 'zielpreis', 'alarm_hoch', 'bewertung', 'bild', 'hinzugefuegt'];
 
 const comma = (n) => (n === null || n === undefined || n === '' ? '' : String(n).replace('.', ','));
 const num = (v) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : null; };
 const money = (v) => { const n = num(v); return n !== null && n >= 0 ? n.toFixed(2) : null; };
+// "PSA 10" / "BGS 9,5" -> { company, grade }
+const parseGrade = (v) => {
+  const m = String(v || '').trim().match(/^([A-Za-z]+)\s*([0-9]+(?:[.,][0-9])?)$/);
+  if (!m) return null;
+  const c = m[1].toUpperCase();
+  return { company: c === 'ANDERE' ? 'Andere' : c, grade: m[2].replace(',', '.') };
+};
 const yes = (v) => ['ja', 'yes', 'true', '1', 'x'].includes(String(v || '').trim().toLowerCase());
 const normVariant = (v) => {
   const s = String(v || '').trim().toLowerCase().replace(/\s+/g, '');
@@ -429,6 +520,8 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
         einkaufspreis: comma(it.userPurchasePrice),
         verkauf: it.forSale ? 'ja' : '',
         zielpreis: '',
+        alarm_hoch: comma(it.alertHigh),
+        bewertung: gradeText(it),
         bild: /^https?:/.test(img) ? img : '',
         hinzugefuegt: it.addedAt || ''
       });
@@ -444,6 +537,7 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
         set_id: it.set?.id || '',
         set_gesamt: it.set?.total ?? '',
         zielpreis: comma(it.targetPrice),
+        alarm_hoch: comma(it.targetHigh),
         bild: /^https?:/.test(img) ? img : '',
         hinzugefuegt: it.addedAt || ''
       });
@@ -524,13 +618,14 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
         const cond = matchName(r.zustand, conditions, 'Near Mint');
         const lang = matchName(r.sprache, languages, 'Deutsch 🇩🇪');
         const variant = normVariant(r.variante);
+        const grade = parseGrade(r.bewertung);
         const csvPrice = money(r.preis);
         let price;
         if (card.isCustom) price = csvPrice ?? '0.00';
         else if (!yes(r.preis_manuell) && full[r.id]) {
-          const calc = calculatePrice(card, cond, lang, variant);
+          const calc = calculatePrice(card, cond, lang, variant, grade);
           price = parseFloat(calc) > 0 ? calc : (csvPrice ?? calc);
-        } else price = csvPrice ?? calculatePrice(card, cond, lang, variant);
+        } else price = csvPrice ?? calculatePrice(card, cond, lang, variant, grade);
         batch.set(doc(fsCollection(db, 'users', uid, 'collection')), {
           ...card,
           userCondition: cond,
@@ -540,6 +635,8 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
           userQuantity: Math.max(1, parseInt(r.anzahl, 10) || 1),
           userPurchasePrice: money(r.einkaufspreis),
           forSale: yes(r.verkauf),
+          userGrade: grade,
+          alertHigh: num(r.alarm_hoch) > 0 ? num(r.alarm_hoch) : null,
           customImage: null,
           addedAt: Number(r.hinzugefuegt) || Date.now()
         });
@@ -551,6 +648,7 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
         batch.set(doc(db, 'users', uid, 'watchlist', r.id), {
           ...base(r),
           ...(target && target > 0 ? { targetPrice: target } : {}),
+          ...(num(r.alarm_hoch) > 0 ? { targetHigh: num(r.alarm_hoch) } : {}),
           addedAt: Number(r.hinzugefuegt) || Date.now()
         });
         ops += 1;

@@ -7,12 +7,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { cleanName, parseNumber, buildQuery, coverRect } from './scanParse';
 import { watchPrice } from './priceData';
 import { OwnedBadge } from './Backup';
+import { rankByImage } from './imageMatch';
 
 // ---- gemeinsamer OCR-Worker (wird nach dem Schließen nach 60 s wieder freigegeben) ----
 let workerPromise = null;
 let idleTimer = null;
 
-function getWorker(onStatus) {
+export function getWorker(onStatus) {
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (!workerPromise) {
     workerPromise = import('tesseract.js').then(({ createWorker }) =>
@@ -28,7 +29,7 @@ function getWorker(onStatus) {
   return workerPromise;
 }
 
-function releaseWorkerLater() {
+export function releaseWorkerLater() {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     const p = workerPromise;
@@ -85,7 +86,7 @@ function prepare(src, x, y, w, h, targetW, invert = 'auto') {
 }
 
 // Name oben + Nummer unten lesen
-async function readCard(worker, card) {
+export async function readCard(worker, card) {
   const cw = card.width, ch = card.height;
   const nameBox = [0.05 * cw, 0.025 * ch, 0.74 * cw, 0.105 * ch];
   const numBox = [0.02 * cw, 0.895 * ch, 0.96 * cw, 0.10 * ch];
@@ -114,7 +115,7 @@ async function readCard(worker, card) {
   return { name, number, thumbs: { name: thumb(nameThumb), num: thumb(numThumb) } };
 }
 
-async function loadImageSource(file) {
+export async function loadImageSource(file) {
   if (window.createImageBitmap) {
     try {
       const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -134,7 +135,7 @@ async function loadImageSource(file) {
 
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 
-export default function CardScanner({ mode, onClose, onResult, onSearch, onPick, Img, series, onSeriesChange, owned }) {
+export default function CardScanner({ mode, onClose, onResult, onSearch, onPick, Img, series, onSeriesChange, owned, api }) {
   const [phase, setPhase] = useState('camera'); // camera | reading | result
   const [camError, setCamError] = useState('');
   const [camReady, setCamReady] = useState(false);
@@ -146,10 +147,12 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
   const [results, setResults] = useState(null); // null = noch nicht gesucht
   const [searching, setSearching] = useState(false);
   const [note, setNote] = useState('');
+  const [scores, setScores] = useState({});
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const aliveRef = useRef(true);
+  const canvasRef = useRef(null);
 
   const stopCamera = () => {
     if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
@@ -204,6 +207,13 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
         list = await onSearch(nm);
         if (list.length > 0) setNote('Mit dieser Nummer gab es keinen Treffer – es wurde nur nach dem Namen gesucht.');
       }
+      if (list.length > 1 && canvasRef.current && api) {
+        try {
+          const r = await rankByImage(canvasRef.current, list, api);
+          list = r.cards;
+          if (aliveRef.current) setScores(r.scores);
+        } catch (e) { /* ohne Bildvergleich weiter */ }
+      }
       if (aliveRef.current) setResults(list);
     } catch (e) {
       if (aliveRef.current) {
@@ -218,6 +228,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
   };
 
   const runOcr = async (card) => {
+    canvasRef.current = card; setScores({});
     setPhase('reading'); setError(''); setResults(null); setNote(''); setStatus('Lade Texterkennung …');
     try {
       const worker = await getWorker((s) => aliveRef.current && setStatus(s));
@@ -370,6 +381,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
                       </p>
                       <p className="text-[10px] text-slate-400 truncate">{(card.set && card.set.name) || 'Unbekannt'}</p>
                       <p className="text-[11px] text-cyan-400 font-bold">{eur(watchPrice(card.cardmarket && card.cardmarket.prices))}</p>
+                      {scores[card.id] != null && <p className="text-[10px] text-slate-400">Ähnlichkeit {scores[card.id]} %</p>}
                       {owned && <OwnedBadge info={owned.get(card.id)} className="mt-1" />}
                     </button>
                   ))}

@@ -4,7 +4,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { loadCardPrices, loadHistory, fetchPrices, watchPrice } from './priceData';
+import { loadCardPrices, loadHistory, fetchPrices, watchPrice, outlierOf } from './priceData';
 
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const signedEur = (n) => `${n >= 0 ? '+' : '−'}${eur(Math.abs(n))}`;
@@ -386,5 +386,26 @@ export function MissingCost({ ids, api, prices, onPrices, unpicked = 0 }) {
         </p>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Ausreißer-Warnung: Preis weicht auffällig vom 30-Tage-Schnitt / günstigsten Angebot ab
+// ---------------------------------------------------------------------
+const OUTLIER_LABEL = { spike: 'Preis-Spitze?', dip: 'Preis-Einbruch?', gap: 'Preis-Lücke?' };
+
+export function OutlierBadge({ prices, holo = false, detail = false, className = '' }) {
+  const o = outlierOf(prices, holo);
+  if (!o) return null;
+  return (
+    <span className={className}>
+      <span
+        title={`${o.text}. Vor Kauf/Verkauf die echten Angebote prüfen.`}
+        className="inline-block text-[10px] font-bold text-amber-300 bg-amber-500/10 border border-amber-500/40 rounded px-1.5 py-0.5"
+      >
+        ⚠️ {OUTLIER_LABEL[o.kind]}
+      </span>
+      {detail && <span className="block text-[10px] text-amber-200/80 mt-0.5">{o.text}. Vor Kauf/Verkauf die echten Angebote prüfen.</span>}
+    </span>
   );
 }

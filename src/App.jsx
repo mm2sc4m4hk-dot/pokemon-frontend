@@ -19,10 +19,13 @@ import {
 import { auth, db } from './firebase';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
-import { CardHistoryChart, WeeklyMovers, PushToggle } from './Insights';
+import { CardHistoryChart, WeeklyMovers, PushToggle, OutlierBadge } from './Insights';
 import { CompletionPanel, BinderCompletion } from './Completion';
 import CardScanner from './CardScanner';
 import { SharePanel, BackupPanel, WantlistExport, SharedView, OwnedBadge, buildOwnedMap } from './Backup';
+import BatchScanner from './BatchScanner';
+import { SellAllCalculator, PortfolioSplit, RecordSaleModal, SalesHistory, NewSetsBanner, TradeCalculator, SellerPlanner } from './Features';
+import { BudgetPlanner, DataQualityCheck } from './Tools';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -73,6 +76,22 @@ const variantChoices = (card, current) => {
   const cur = VARIANTS.find((v) => v.key === current);
   return cur ? [...base, cur] : base;
 };
+
+// Graded-Karten (PSA, BGS, CGC ...): der Richtwert ist nur eine grobe Schätzung über einen Faktor auf den Rohpreis.
+const GRADE_COMPANIES = ['PSA', 'BGS', 'CGC', 'SGC', 'ACE', 'Andere'];
+const GRADE_VALUES = ['10', '9.5', '9', '8.5', '8', '7', '6', '5', '4', '3', '2', '1'];
+const gradeFactor = (g) => {
+  const n = parseFloat(g);
+  if (!(n > 0)) return 1;
+  if (n >= 10) return 3;
+  if (n >= 9.5) return 2.2;
+  if (n >= 9) return 1.6;
+  if (n >= 8) return 1.2;
+  if (n >= 7) return 1.0;
+  return 0.85;
+};
+const gradeLabel = (g) => (g && g.company && g.grade ? `${g.company} ${g.grade}` : '');
+const makeGrade = (company, grade) => (company && grade ? { company, grade } : null);
 
 const usernameToEmail = (username) => `${username.trim().toLowerCase()}@poketracker.local`;
 
@@ -191,7 +210,7 @@ function ValueChart({ points }) {
   );
 }
 
-function SellView({ items }) {
+function SellView({ items, onSold }) {
   const [feePct, setFeePct] = useState(() => loadSetting('sellFeePct', '5'));
   const [shipping, setShipping] = useState(() => loadSetting('sellShipping', '1.50'));
   const [withPrice, setWithPrice] = useState(true);
@@ -214,7 +233,7 @@ function SellView({ items }) {
       it.set?.name || '',
       it.number ? `#${it.number}` : '',
       variant,
-      it.userCondition || '',
+      gradeLabel(it.userGrade) || it.userCondition || '',
       String(it.userLanguage || '').split(' ')[0]
     ].filter(Boolean);
     return parts.join(' | ') + (withPrice ? ` | ${eur(parseFloat(it.userPrice) || 0)}` : '');
@@ -273,6 +292,7 @@ function SellView({ items }) {
               <div className="text-right whitespace-nowrap">
                 <p className="text-cyan-400 font-bold">{eur(price * qtyOf(it))}</p>
                 <p className="text-slate-500">netto {eur(price * qtyOf(it) * (1 - fee / 100))}</p>
+                <button onClick={() => onSold && onSold(it)} className="mt-1 text-[11px] font-bold text-emerald-300 border border-emerald-500/40 rounded px-2 py-0.5 hover:bg-emerald-500 hover:text-slate-950">✔ Verkauft</button>
               </div>
             </div>
           );
@@ -517,6 +537,9 @@ export default function App() {
   const [cardCondition, setCardCondition] = useState(() => loadSetting('lastCondition', '') || 'Near Mint');
   const [cardLanguage, setCardLanguage] = useState(() => loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
   const [cardVariant, setCardVariant] = useState('normal');
+  const [gradeCompany, setGradeCompany] = useState('');
+  const [gradeValue, setGradeValue] = useState('');
+  const [alertHigh, setAlertHigh] = useState('');
   const [detailVariant, setDetailVariant] = useState('normal');
   const [customPrice, setCustomPrice] = useState('');
   const [customImage, setCustomImage] = useState('');
@@ -545,6 +568,8 @@ export default function App() {
   // Karten-Scanner: null | 'search' | 'collection'
   const [scanOpen, setScanOpen] = useState(null);
   const [scanSeries, setScanSeries] = useState(() => loadSetting('scanSeries', '0') === '1');
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [saleItem, setSaleItem] = useState(null);
   const scanFlowRef = useRef(false); // true, wenn das Hinzufügen-Fenster aus dem Scanner kam
 
   const unsubscribers = useRef([]);
@@ -572,7 +597,7 @@ export default function App() {
   const [metaMsg, setMetaMsg] = useState('');
   const metaTried = useRef(false);
 
-  useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); } }, [modalType]);
+  useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); setGradeCompany(''); setGradeValue(''); setAlertHigh(''); } }, [modalType]);
   useEffect(() => { if (customCardOpen) { setCardQuantity('1'); setPurchasePrice(''); } }, [customCardOpen]);
 
   // Ping: hält das Render-Backend wach (Gratisplan schläft nach ~15 Min. ohne Anfrage ein).
@@ -752,14 +777,14 @@ export default function App() {
     setAuthPasswordConfirm('');
   };
 
-  const calculatePrice = (card, conditionName, langName, variantKey = 'normal') => {
+  const calculatePrice = (card, conditionName, langName, variantKey = 'normal', grade = null) => {
     if (!card) return "0.00";
     const isHolo = VARIANTS.find(v => v.key === variantKey)?.holo;
     const prices = card.cardmarket?.prices || {};
     const basePrice = isHolo
       ? (prices.trendPriceHolo || prices.avg1Holo || 0)
       : (prices.trendPrice || prices.averageSellPrice || 0);
-    const condFactor = CONDITIONS.find(c => c.name === conditionName)?.factor || 1.0;
+    const condFactor = grade && grade.grade ? gradeFactor(grade.grade) : (CONDITIONS.find(c => c.name === conditionName)?.factor || 1.0);
     const langFactor = LANGUAGES.find(l => l.name === langName)?.factor || 1.0;
     return (basePrice * condFactor * langFactor).toFixed(2);
   };
@@ -869,13 +894,15 @@ export default function App() {
 
   const addToCollection = async () => {
     if (!auth.currentUser) return;
-    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant);
+    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant, makeGrade(gradeCompany, gradeValue));
     const newItem = {
       ...selectedCard,
       userCondition: cardCondition,
       userLanguage: cardLanguage,
       userVariant: cardVariant,
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
+      userGrade: makeGrade(gradeCompany, gradeValue),
+      alertHigh: parseMoney(alertHigh) && parseFloat(parseMoney(alertHigh)) > 0 ? parseFloat(parseMoney(alertHigh)) : null,
       userQuantity: parseQty(cardQuantity),
       userPurchasePrice: parseMoney(purchasePrice),
       customImage: customImage || null,
@@ -884,7 +911,7 @@ export default function App() {
     delete newItem.docId;
     delete newItem.instanceId;
     // Watchlist-Felder gehören nicht in die Collection
-    ['targetPrice', 'prevPrice', 'priceDay', 'alertedTarget', 'alertedAt', 'alertedPrice', 'priceUpdatedAt'].forEach((k) => { delete newItem[k]; });
+    ['targetPrice', 'prevPrice', 'priceDay', 'alertedTarget', 'alertedAt', 'alertedPrice', 'priceUpdatedAt', 'targetHigh', 'alertedHigh'].forEach((k) => { delete newItem[k]; });
     try {
       await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
       
@@ -909,11 +936,43 @@ export default function App() {
     }
   };
 
+  // Batch-Scanner: mehrere erkannte Karten auf einmal in die Collection
+  const addBatchToCollection = async (entries, cond, lang) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) throw new Error('Nicht angemeldet.');
+    let batch = writeBatch(db);
+    let ops = 0;
+    for (const { card, qty } of entries) {
+      const variant = getAvailableVariants(card)[0].key;
+      const item = {
+        ...card,
+        userCondition: cond,
+        userLanguage: lang,
+        userVariant: variant,
+        userPrice: calculatePrice(card, cond, lang, variant),
+        userQuantity: qty,
+        userPurchasePrice: null,
+        customImage: null,
+        addedAt: Date.now()
+      };
+      delete item.docId;
+      delete item.instanceId;
+      ['targetPrice', 'prevPrice', 'priceDay', 'alertedTarget', 'alertedAt', 'alertedPrice', 'priceUpdatedAt', 'targetHigh', 'alertedHigh'].forEach((k) => { delete item[k]; });
+      batch.set(doc(fsCollection(db, 'users', uid, 'collection')), item);
+      ops += 1;
+      if (ops >= 400) { await batch.commit(); batch = writeBatch(db); ops = 0; }
+    }
+    if (ops > 0) await batch.commit();
+    saveSetting('lastCondition', cond);
+    saveSetting('lastLang', lang);
+    setToastMsg(`${entries.length} Karten zur Collection hinzugefügt! ✓`);
+  };
+
   // Ist der gespeicherte Preis automatisch berechnet (und nicht vom Nutzer selbst
   // eingetragen)? Nur dann darf die Aktualisierung ihn überschreiben.
   const isAutoPrice = (item) => {
     if (item.isCustom) return false;
-    const calc = parseFloat(calculatePrice(item, item.userCondition, item.userLanguage, item.userVariant || 'normal'));
+    const calc = parseFloat(calculatePrice(item, item.userCondition, item.userLanguage, item.userVariant || 'normal', item.userGrade));
     return Math.abs(calc - (parseFloat(item.userPrice) || 0)) < 0.011;
   };
 
@@ -959,7 +1018,7 @@ export default function App() {
         const auto = isAutoPrice(item);
         const cardmarket = merged(item, f);
         const newPrice = auto
-          ? calculatePrice({ ...item, cardmarket }, item.userCondition, item.userLanguage, item.userVariant || 'normal')
+          ? calculatePrice({ ...item, cardmarket }, item.userCondition, item.userLanguage, item.userVariant || 'normal', item.userGrade)
           : item.userPrice;
         if (!auto) keptManual += 1;
         if (samePrices(f.prices, item.cardmarket?.prices) && String(newPrice) === String(item.userPrice)) continue;
@@ -1022,6 +1081,9 @@ export default function App() {
     setCustomImage(item.customImage || '');
     setCardQuantity(String(qtyOf(item)));
     setPurchasePrice(item.userPurchasePrice ? String(item.userPurchasePrice) : '');
+    setGradeCompany(item.userGrade?.company || '');
+    setGradeValue(item.userGrade?.grade || '');
+    setAlertHigh(item.alertHigh ? String(item.alertHigh) : '');
     setMoveFromWatchlistId(null);
     setModalType('edit');
   };
@@ -1032,7 +1094,7 @@ export default function App() {
     let price;
     if (priceTouched) price = parseFloat(customPrice).toFixed(2);
     else if (selectedCard.isCustom) price = selectedCard.userPrice || '0.00';
-    else price = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant);
+    else price = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant, makeGrade(gradeCompany, gradeValue));
     try {
       await updateDoc(doc(db, 'users', auth.currentUser.uid, 'collection', selectedCard.docId), {
         userCondition: cardCondition,
@@ -1041,7 +1103,9 @@ export default function App() {
         userPrice: price,
         userQuantity: parseQty(cardQuantity),
         userPurchasePrice: parseMoney(purchasePrice),
-        customImage: customImage || null
+        customImage: customImage || null,
+        userGrade: makeGrade(gradeCompany, gradeValue),
+        alertHigh: parseMoney(alertHigh) && parseFloat(parseMoney(alertHigh)) > 0 ? parseFloat(parseMoney(alertHigh)) : null
       });
       setModalType(null);
       setCustomPrice('');
@@ -1145,6 +1209,20 @@ export default function App() {
       setToastMsg('Zielpreis gespeichert! 🎯');
     } catch (err) {
       console.error('Fehler beim Aktualisieren des Zielpreises:', err);
+    }
+  };
+
+  // Alarm bei Preisanstieg (Watchlist): Gegenstück zum Zielpreis nach unten
+  const updateTargetHigh = async (cardId, price) => {
+    if (!auth.currentUser) return;
+    try {
+      const clean = parseMoney(price);
+      const old = parseFloat(watchlist.find((c) => c.id === cardId)?.targetHigh) || 0;
+      if ((clean ? parseFloat(clean) : 0) === old) return;
+      await updateDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', cardId), { targetHigh: clean ? parseFloat(clean) : null });
+      setToastMsg('Alarm für Preisanstieg gespeichert! 📈');
+    } catch (err) {
+      console.error('Fehler beim Speichern des Alarms:', err);
     }
   };
 
@@ -1546,6 +1624,7 @@ export default function App() {
       <main className="max-w-4xl mx-auto p-4">
         {activeTab === 'profile' && (
           <div className="space-y-6 fade-in">
+            <NewSetsBanner api={API_URL} watchIds={watchlistIds} uid={auth.currentUser?.uid} Img={CardImage} />
             {dealCount > 0 && (
               <button onClick={() => setActiveTab('watchlist')} className="w-full text-left bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-3 text-sm text-emerald-300 hover:bg-emerald-500/20 transition-colors">
                 🎯 {dealCount === 1 ? '1 Karte auf deiner Watchlist hat' : `${dealCount} Karten auf deiner Watchlist haben`} ihren Zielpreis erreicht – zur Watchlist
@@ -1609,7 +1688,23 @@ export default function App() {
               </>
             )}
 
-            <SharePanel collection={collection} ready={collectionReady} />
+            {collection.length > 0 && (
+              <>
+                <PortfolioSplit collection={collection} />
+                <SellAllCalculator collection={collection} />
+              </>
+            )}
+
+            <DataQualityCheck
+              collection={collection}
+              watchlist={watchlist}
+              uid={auth.currentUser?.uid}
+              calculatePrice={calculatePrice}
+              isAutoPrice={isAutoPrice}
+              onEdit={openEditCard}
+            />
+
+            <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} />
             <BackupPanel
               collection={collection}
               watchlist={watchlist}
@@ -1625,11 +1720,12 @@ export default function App() {
         {activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {[['cards', '🎴 Karten'], ['binder', '📒 Binder'], ['sets', '📊 Sets'], ['dex', '📖 Pokédex'], ['artist', '🎨 Artist'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`]].map(([key, label]) => (
+              {[['cards', '🎴 Karten'], ['binder', '📒 Binder'], ['sets', '📊 Sets'], ['dex', '📖 Pokédex'], ['artist', '🎨 Artist'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`], ['sold', '🧾 Verkäufe'], ['trade', '🔁 Tausch']].map(([key, label]) => (
                 <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
               ))}
             </div>
             <button onClick={() => setScanOpen('collection')} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md">📷 Karte scannen &amp; hinzufügen</button>
+            <button onClick={() => setBatchOpen(true)} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md">🗂️ Mehrere Karten per Foto</button>
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
               <button onClick={() => refreshPrices()} disabled={refreshing} className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-xs font-black px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
                 {refreshing ? '⏳ Lädt …' : '🔄 Preise aktualisieren'}
@@ -1676,7 +1772,11 @@ export default function App() {
             ) : collectionView === 'artist' ? (
               <ArtistView {...extraProps} />
             ) : collectionView === 'sell' ? (
-              <SellView items={collection.filter(i => i.forSale)} />
+              <SellView items={collection.filter(i => i.forSale)} onSold={setSaleItem} />
+            ) : collectionView === 'sold' ? (
+              <SalesHistory />
+            ) : collectionView === 'trade' ? (
+              <TradeCalculator collection={collection} api={API_URL} />
             ) : filteredCollection.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Keine Karten gefunden.</div>
             ) : (
@@ -1691,7 +1791,9 @@ export default function App() {
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-cyan-400 font-bold">{item.userPrice} €</span>
                       <div className="flex items-center gap-1">
-                        <span className="text-[10px] bg-slate-800 px-1 rounded text-slate-300">{item.userCondition}</span>
+                        {item.userGrade
+                          ? <span className="text-[10px] bg-violet-500/20 text-violet-300 px-1 rounded font-bold">{gradeLabel(item.userGrade)}</span>
+                          : <span className="text-[10px] bg-slate-800 px-1 rounded text-slate-300">{item.userCondition}</span>}
                         {item.userVariant && item.userVariant !== 'normal' && (
                           <span className="text-[10px] bg-cyan-500/20 text-cyan-300 px-1 rounded">{VARIANTS.find(v => v.key === item.userVariant)?.label || item.userVariant}</span>
                         )}
@@ -1709,6 +1811,12 @@ export default function App() {
                         </p>
                       );
                     })()}
+                    {!item.isCustom && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {!item.userGrade && <OutlierBadge prices={item.cardmarket?.prices} holo={['reverse', 'holo'].includes(item.userVariant)} />}
+                        {item.alertHigh > 0 && <span className="text-[10px] text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded px-1.5 py-0.5">📈 Alarm ab {eur(item.alertHigh)}</span>}
+                      </div>
+                    )}
                     <button
                       onClick={() => toggleForSale(item)}
                       className={`mt-2 w-full text-[11px] font-bold py-1 rounded-md border transition-colors ${item.forSale ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-slate-950 text-slate-500 border-slate-800 hover:text-slate-300'}`}
@@ -1727,6 +1835,8 @@ export default function App() {
           <div className="space-y-4 fade-in">
             <PushToggle apiUrl={API_URL} />
             <WantlistExport watchlist={watchlist} api={API_URL} />
+            <SellerPlanner watchlist={watchlist} uid={auth.currentUser?.uid} />
+            <BudgetPlanner watchlist={watchlist} uid={auth.currentUser?.uid} Img={CardImage} />
             {todaysDrops.length > 0 && (
               <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
                 <h3 className="text-sm font-black text-emerald-300">📉 Heute günstiger geworden ({todaysDrops.length})</h3>
@@ -1772,6 +1882,8 @@ export default function App() {
                   const target = parseFloat(card.targetPrice) || 0;
                   const currentTrend = watchPrice(card);
                   const isDeal = target > 0 && currentTrend > 0 && currentTrend <= target;
+                  const high = parseFloat(card.targetHigh) || 0;
+                  const isHigh = high > 0 && currentTrend >= high;
 
                   return (
                     <div key={card.id} className={`bg-slate-900 border ${isDeal ? 'border-emerald-500 shadow-lg shadow-emerald-500/10' : 'border-slate-800 hover:border-cyan-500/50'} rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors`}>
@@ -1798,6 +1910,23 @@ export default function App() {
                             </span>
                           )}
                         </div>
+
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-[10px] text-slate-400">Alarm ab:</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            placeholder="0.00 €"
+                            defaultValue={card.targetHigh || ''}
+                            onBlur={(e) => updateTargetHigh(card.id, e.target.value)}
+                            className="w-20 bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500"
+                          />
+                          <span className="text-xs text-slate-400">€</span>
+                          {isHigh && (
+                            <span className="bg-sky-500/20 border border-sky-500/50 text-sky-300 text-[10px] font-black px-2 py-0.5 rounded-md animate-pulse">📈 GESTIEGEN</span>
+                          )}
+                        </div>
+                        <OutlierBadge prices={card.cardmarket?.prices} holo={watchUsesHolo(card)} detail className="block mt-1" />
 
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-sm font-bold text-cyan-400">{eur(currentTrend)}</p>
@@ -1883,6 +2012,7 @@ export default function App() {
                     <CardTitle card={card} />
                     <p className="text-xs text-slate-400 truncate">{card.set?.name || 'Unbekannt'}</p>
                     <OwnedBadge info={ownedMap.get(card.id)} className="mt-1 self-start" />
+                    <OutlierBadge prices={card.cardmarket?.prices} holo={!!VARIANTS.find(v => v.key === sel.variant)?.holo} className="mt-1 self-start" />
 
                     <div className="flex flex-wrap gap-1 mt-2">
                       <select value={sel.condition} onChange={e => updateSearchSelection(card.id, { condition: e.target.value })} className="flex-1 bg-slate-950 border border-slate-800 text-[10px] rounded-lg p-1 text-slate-300">
@@ -1957,10 +2087,28 @@ export default function App() {
           onPick={handleScanPick}
           Img={CardImage}
           owned={ownedMap}
+          api={API_URL}
           series={scanSeries}
           onSeriesChange={(v) => { setScanSeries(v); saveSetting('scanSeries', v ? '1' : '0'); }}
         />
       )}
+
+      {batchOpen && (
+        <BatchScanner
+          onClose={() => setBatchOpen(false)}
+          onSearch={scanSearch}
+          onAdd={addBatchToCollection}
+          Img={CardImage}
+          api={API_URL}
+          conditions={CONDITIONS}
+          languages={LANGUAGES}
+          defaultCondition={loadSetting('lastCondition', '') || 'Near Mint'}
+          defaultLanguage={loadSetting('lastLang', '') || 'Deutsch 🇩🇪'}
+          owned={ownedMap}
+        />
+      )}
+
+      {saleItem && <RecordSaleModal item={saleItem} onClose={() => setSaleItem(null)} onDone={setToastMsg} />}
 
       {modalType && selectedCard && (
         <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2050,9 +2198,32 @@ export default function App() {
                     {variantChoices(selectedCard, cardVariant).map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
                   </select>
                 </div>
+                <div>
+                  <label className="text-xs text-slate-400">Graded (PSA, BGS, CGC …)</label>
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <select value={gradeCompany} onChange={e => { setGradeCompany(e.target.value); if (!e.target.value) setGradeValue(''); else if (!gradeValue) setGradeValue('10'); }} className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm focus:border-cyan-500 outline-none">
+                      <option value="">Nicht gegradet</option>
+                      {GRADE_COMPANIES.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <select value={gradeValue} disabled={!gradeCompany} onChange={e => setGradeValue(e.target.value)} className="bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm focus:border-cyan-500 outline-none disabled:opacity-40">
+                      {GRADE_VALUES.map(g => <option key={g} value={g}>{g}</option>)}
+                    </select>
+                  </div>
+                  {gradeCompany && <p className="text-[10px] text-slate-500 mt-1">Graded-Preise weichen stark vom Rohpreis ab. Der Richtwert ist nur grob geschätzt (Faktor auf den Rohpreis) – trage am besten den Preis echter Verkäufe ein.</p>}
+                </div>
                 <div className="bg-slate-950 border border-cyan-500/30 p-3 rounded-lg text-center shadow-inner">
                   <p className="text-[10px] text-slate-400 uppercase tracking-wider">Geschätzter Richtwert</p>
-                  <p className="text-xl font-black text-emerald-400">~{calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant)} €</p>
+                  <p className="text-xl font-black text-emerald-400">~{calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant, makeGrade(gradeCompany, gradeValue))} €</p>
+                  {!gradeCompany && <OutlierBadge prices={selectedCard.cardmarket?.prices} holo={!!VARIANTS.find(v => v.key === cardVariant)?.holo} detail className="block mt-1" />}
+                  {(() => {
+                    const est = parseFloat(calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant, makeGrade(gradeCompany, gradeValue)));
+                    const mine = parseFloat(customPrice);
+                    if (!(est > 0) || !(mine > 0)) return null;
+                    const fct = mine / est;
+                    return fct > 3 || fct < 1 / 3
+                      ? <p className="text-[10px] text-amber-300 mt-1">⚠️ Dein Preis liegt {fct > 1 ? `${fct.toFixed(1)}× über` : `${(1 / fct).toFixed(1)}× unter`} dem Richtwert – Tippfehler?</p>
+                      : null;
+                  })()}
                 </div>
                 <div>
                   <label className="text-xs text-slate-400">Eigenen Preis eintragen (optional)</label>
@@ -2067,6 +2238,11 @@ export default function App() {
                     <label className="text-xs text-slate-400">Einkaufspreis pro Stück €</label>
                     <input type="number" min="0" step="0.01" value={purchasePrice} onChange={e => setPurchasePrice(e.target.value)} placeholder="optional" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
                   </div>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">📈 Alarm, wenn der Preis über … € steigt (optional)</label>
+                  <input type="number" min="0" step="0.01" value={alertHigh} onChange={e => setAlertHigh(e.target.value)} placeholder="z. B. verkaufen ab 25.00" className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none" />
+                  {gradeCompany && <p className="text-[10px] text-amber-300 mt-1">Für gegradete Karten gibt es keinen automatischen Alarm – der Server kennt nur Rohpreise.</p>}
                 </div>
                 <div>
                   <label className="text-xs text-slate-400">Eigenes Foto der Karte (optional)</label>

@@ -82,3 +82,17 @@ export async function loadHistory(id) {
   const days = snap.exists() ? (snap.data().days || {}) : {};
   return Object.keys(days).sort().map((date) => ({ date, t: Number(days[date][0]) || 0, h: Number(days[date][1]) || 0 }));
 }
+
+// Ausreißer-Check: ist der Trendpreis auffällig weit vom 30-Tage-Schnitt bzw. vom günstigsten Angebot weg?
+// Gibt null zurück, wenn alles unauffällig ist (Karten unter 1 € werden ignoriert, dort schwanken Preise ständig).
+export function outlierOf(prices, holo = false) {
+  const p = prices || {};
+  const t = holo ? (p.trendPriceHolo || p.avg1Holo) : (p.trendPrice || p.averageSellPrice);
+  const a30 = holo ? p.avg30Holo : p.avg30;
+  const low = holo ? p.lowHolo : p.low;
+  if (!(t >= 1)) return null;
+  if (a30 > 0 && t / a30 >= 1.6) return { kind: 'spike', text: `Trend liegt ${Math.round((t / a30 - 1) * 100)} % über dem 30-Tage-Schnitt` };
+  if (a30 > 0 && t / a30 <= 0.6) return { kind: 'dip', text: `Trend liegt ${Math.round((1 - t / a30) * 100)} % unter dem 30-Tage-Schnitt` };
+  if (low > 0 && t / low >= 5) return { kind: 'gap', text: `Trend ist ${(t / low).toFixed(1).replace('.', ',')}× so hoch wie das günstigste Angebot` };
+  return null;
+}
