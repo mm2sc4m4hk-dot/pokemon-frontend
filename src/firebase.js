@@ -14,7 +14,7 @@
 
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyA9vq-yuzUcR9yxaDwxIjhzrCqlf4_-q-A",
@@ -27,4 +27,5 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app);
+// undefined-Felder werden ignoriert statt den ganzen Schreibvorgang abzulehnen
+export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });

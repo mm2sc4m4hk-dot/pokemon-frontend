@@ -20,6 +20,8 @@ import { auth, db } from './firebase';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
 import { CardHistoryChart, WeeklyMovers, PushToggle } from './Insights';
+import { CompletionPanel, BinderCompletion } from './Completion';
+import CardScanner from './CardScanner';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -60,6 +62,15 @@ const getAvailableVariants = (card) => {
   if (!flags) return [VARIANTS[0]];
   const available = VARIANTS.filter((v) => flags[v.key]);
   return available.length > 0 ? available : [VARIANTS[0]];
+};
+
+// Varianten für Hinzufügen/Bearbeiten: nur die laut Datenbank vorhandenen (eigene Karten: alle);
+// eine bereits gespeicherte Variante bleibt immer wählbar.
+const variantChoices = (card, current) => {
+  const base = card?.isCustom ? VARIANTS : getAvailableVariants(card);
+  if (!current || base.some((v) => v.key === current)) return base;
+  const cur = VARIANTS.find((v) => v.key === current);
+  return cur ? [...base, cur] : base;
 };
 
 const usernameToEmail = (username) => `${username.trim().toLowerCase()}@poketracker.local`;
@@ -289,9 +300,10 @@ const setIdOf = (item) => {
   return i > 0 ? id.slice(0, i) : null;
 };
 
-function SetsView({ collection }) {
+function SetsView({ collection, watchIds }) {
   const [open, setOpen] = useState(null);
   const [cache, setCache] = useState({});
+  const [noSecret, setNoSecret] = useState({}); // Set-ID -> Secret Rares aus der Kostenrechnung lassen
 
   const groups = new Map();
   let withoutSet = 0;
@@ -333,6 +345,11 @@ function SetsView({ collection }) {
         const pct = g.total ? Math.min(100, Math.round((owned / g.total) * 100)) : 0;
         const c = cache[g.id];
         const missing = c?.cards ? c.cards.filter(card => !g.ids.has(card.id)) : [];
+        // Secret Rares = Kartennummer größer als die offizielle Set-Größe (nur rein numerische Nummern)
+        const isSecret = (card) => !!g.total && /^\d+$/.test(String(card.localId)) && parseInt(card.localId, 10) > g.total;
+        const hideSecret = !!noSecret[g.id];
+        const costCards = (hideSecret ? missing.filter(card => !isSecret(card)) : missing)
+          .map(card => ({ id: card.id, name: card.name, image: card.image, localId: card.localId, setName: g.name }));
         return (
           <div key={g.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 shadow-md">
             <button onClick={() => toggle(g)} className="w-full text-left">
@@ -352,6 +369,20 @@ function SetsView({ collection }) {
                   ? <p className="text-xs text-emerald-400">Komplett – dir fehlt keine Karte dieses Sets. 🎉</p>
                   : <>
                       <p className="text-[10px] text-slate-500 mb-2">Fehlend: {missing.length} (inkl. Secret Rares)</p>
+                      <CompletionPanel
+                        title="💶 Was kostet es, dieses Set zu komplettieren?"
+                        cards={costCards}
+                        api={API_URL}
+                        uid={auth.currentUser?.uid}
+                        watchIds={watchIds}
+                        Img={CardImage}
+                      />
+                      {g.total ? (
+                        <label className="flex items-center gap-2 text-[11px] text-slate-400 mb-3">
+                          <input type="checkbox" checked={hideSecret} onChange={e => setNoSecret(s => ({ ...s, [g.id]: e.target.checked }))} className="accent-cyan-500" />
+                          Secret Rares (Nr. über {g.total}) nicht mitrechnen
+                        </label>
+                      ) : null}
                       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
                         {missing.map(card => (
                           <div key={card.id} className="text-center">
@@ -482,8 +513,8 @@ export default function App() {
   const [modalType, setModalType] = useState(null);
 
   // Schnell-Erfassung: Zuletzt gewählte Werte im localStorage speichern
-  const [cardCondition, setCardCondition] = useState(() => localStorage.getItem('lastCondition') || 'Near Mint');
-  const [cardLanguage, setCardLanguage] = useState(() => localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
+  const [cardCondition, setCardCondition] = useState(() => loadSetting('lastCondition', '') || 'Near Mint');
+  const [cardLanguage, setCardLanguage] = useState(() => loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
   const [cardVariant, setCardVariant] = useState('normal');
   const [detailVariant, setDetailVariant] = useState('normal');
   const [customPrice, setCustomPrice] = useState('');
@@ -509,6 +540,11 @@ export default function App() {
 
   // Toast-Feedback
   const [toastMsg, setToastMsg] = useState('');
+
+  // Karten-Scanner: null | 'search' | 'collection'
+  const [scanOpen, setScanOpen] = useState(null);
+  const [scanSeries, setScanSeries] = useState(() => loadSetting('scanSeries', '0') === '1');
+  const scanFlowRef = useRef(false); // true, wenn das Hinzufügen-Fenster aus dem Scanner kam
 
   const unsubscribers = useRef([]);
 
@@ -669,6 +705,10 @@ export default function App() {
       setAuthError('Bitte alle Felder ausfüllen.');
       return;
     }
+    if (!/^[A-Za-z0-9._-]{3,30}$/.test(uname)) {
+      setAuthError('Benutzername: 3–30 Zeichen, nur Buchstaben, Zahlen, Punkt, Unterstrich und Bindestrich.');
+      return;
+    }
     if (authPassword !== authPasswordConfirm) {
       setAuthError('Die Passwörter stimmen nicht überein.');
       return;
@@ -739,13 +779,14 @@ export default function App() {
     return points.map(p => ({ ...p, pct: Math.max(8, Math.round((p.value / max) * 100)) }));
   };
 
-  const handleSearch = async (e) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  const handleSearch = async (e, override) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const queryText = typeof override === 'string' ? override : searchQuery;
+    if (!queryText.trim()) return -1;
     setLoading(true);
     setSearchError('');
     try {
-      const params = new URLSearchParams({ name: searchQuery });
+      const params = new URLSearchParams({ name: queryText });
       if (searchSet.trim()) params.set('set', searchSet.trim());
 
       const controller = new AbortController();
@@ -756,7 +797,7 @@ export default function App() {
       if (res.status === 429) {
         setSearchResults([]);
         setSearchError('Zu viele Anfragen an die Kartendatenbank gerade. Bitte kurz warten.');
-        return;
+        return -1;
       }
       if (!res.ok) throw new Error('API antwortet nicht');
       const data = await res.json();
@@ -764,11 +805,14 @@ export default function App() {
       if (!Array.isArray(data)) {
         setSearchResults([]);
         setSearchError('Keine Karten gefunden.');
+        return 0;
       } else if (data.length === 0) {
         setSearchResults([]);
         setSearchError('Keine Karten mit diesem Namen/Nummer gefunden.');
+        return 0;
       } else {
         setSearchResults(data);
+        return data.length;
       }
     } catch (err) {
       if (err.name === 'AbortError') {
@@ -776,6 +820,7 @@ export default function App() {
       } else {
         setSearchError('Verbindungsfehler zum Backend.');
       }
+      return -1;
     } finally {
       setLoading(false);
     }
@@ -822,8 +867,8 @@ export default function App() {
       await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
       
       // Zustand & Sprache für die Schnell-Erfassung merken
-      localStorage.setItem('lastCondition', cardCondition);
-      localStorage.setItem('lastLang', cardLanguage);
+      saveSetting('lastCondition', cardCondition);
+      saveSetting('lastLang', cardLanguage);
 
       if (moveFromWatchlistId && removeFromWatchlistAfter) {
         await removeFromWatchlist(moveFromWatchlistId);
@@ -834,6 +879,9 @@ export default function App() {
       setCustomImage('');
       setCardVariant('normal');
       setToastMsg('Karte zur Collection hinzugefügt! ✓');
+      const scanAgain = scanFlowRef.current && scanSeries && activeTab === 'collection';
+      scanFlowRef.current = false;
+      if (scanAgain) setTimeout(() => setScanOpen('collection'), 400);
     } catch (err) {
       alert('Speichern fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
     }
@@ -1112,8 +1160,8 @@ export default function App() {
         ...brief,
         images: brief.images || { small: brief.image || '' },
         set: brief.set || { name: brief.setName || '' },
-        number: brief.number ?? brief.localId,
-        cardmarket: f ? { prices: f.prices, productId: f.productId, priceSource: f.priceSource, priceDate: f.priceDate } : undefined
+        number: brief.number ?? brief.localId ?? null,
+        cardmarket: f ? { prices: f.prices, productId: f.productId ?? null, priceSource: f.priceSource ?? null, priceDate: f.priceDate ?? null } : { url: '', prices: {} }
       };
     }
     const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
@@ -1125,8 +1173,8 @@ export default function App() {
   // Steht die Karte auf der Watchlist, wird sie danach (abwählbar) von dort entfernt.
   const beginAddToCollection = (card) => {
     setSelectedCard(card);
-    setCardCondition(localStorage.getItem('lastCondition') || 'Near Mint');
-    setCardLanguage(localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
+    setCardCondition(loadSetting('lastCondition', '') || 'Near Mint');
+    setCardLanguage(loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
     setCardVariant(getAvailableVariants(card)[0].key);
     setCustomImage(card.customImage || ''); // Foto aus dem Binder-Slot vorbelegen
     if (watchlistIds.has(card.id)) {
@@ -1161,6 +1209,42 @@ export default function App() {
     } catch (err) {
       alert('Karte konnte nicht geladen werden. Läuft der Server?');
     }
+  };
+
+  // --- Karten-Scanner ---
+  // Suchen-Tab: erkannten Text in die Suche übernehmen und sofort suchen
+  // (findet die Nummer nichts, wird nur nach dem Namen gesucht).
+  const handleScanForSearch = async ({ query, name, number }) => {
+    setScanOpen(null);
+    setSearchQuery(query);
+    setToastMsg('Gescannt: ' + query);
+    const n = await handleSearch(null, query);
+    if (n === 0 && number && name) {
+      setSearchQuery(name);
+      handleSearch(null, name);
+    }
+  };
+
+  // Collection-Tab: Suche für die Trefferliste im Scanner
+  const scanSearch = async (q) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const res = await fetch(`${API_URL}/api/cards?${new URLSearchParams({ name: q }).toString()}`, { signal: controller.signal });
+      if (res.status === 429) throw new Error('Zu viele Anfragen, bitte kurz warten.');
+      if (!res.ok) throw new Error(`Server antwortet mit Status ${res.status}`);
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // Treffer im Scanner angetippt -> normales Hinzufügen-Fenster (Zustand, Sprache, Variante ...)
+  const handleScanPick = (card) => {
+    setScanOpen(null);
+    beginAddToCollection(card);
+    scanFlowRef.current = true;
   };
 
   // Ältere Collection-Karten kennen ihre Pokédex-Nummer und ihren Artist noch nicht -> einmal nachladen
@@ -1508,6 +1592,7 @@ export default function App() {
                 <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
               ))}
             </div>
+            <button onClick={() => setScanOpen('collection')} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md">📷 Karte scannen &amp; hinzufügen</button>
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
               <button onClick={() => refreshPrices()} disabled={refreshing} className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-xs font-black px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
                 {refreshing ? '⏳ Lädt …' : '🔄 Preise aktualisieren'}
@@ -1543,9 +1628,12 @@ export default function App() {
             </div>
 
             {collectionView === 'sets' ? (
-              <SetsView collection={collection} />
+              <SetsView collection={collection} watchIds={watchlistIds} />
             ) : collectionView === 'binder' ? (
-              <BinderView {...extraProps} />
+              <>
+                <BinderCompletion uid={auth.currentUser?.uid} collection={collection} watchIds={watchlistIds} api={API_URL} Img={CardImage} />
+                <BinderView {...extraProps} />
+              </>
             ) : collectionView === 'dex' ? (
               <PokedexView {...extraProps} />
             ) : collectionView === 'artist' ? (
@@ -1562,7 +1650,7 @@ export default function App() {
                     <button onClick={() => removeFromCollection(item.docId)} className="absolute top-2 right-2 bg-slate-950/80 text-rose-400 w-6 h-6 rounded-full text-xs font-bold z-10 border border-rose-500/30 hover:bg-rose-500 hover:text-white transition">✕</button>
                     <CardImage onClick={() => { setSelectedCard(item); setModalType('detail'); }} src={item.customImage || item.images?.small} alt={item.name} className="w-full rounded-lg mb-2 cursor-pointer hover:scale-105 transition-transform" />
                     <CardTitle card={item} />
-                    <p className="text-xs text-slate-400 truncate">{item.set?.name || 'Unbekanntes Set'} • {item.userLanguage.split(' ')[0]}</p>
+                    <p className="text-xs text-slate-400 truncate">{item.set?.name || 'Unbekanntes Set'} • {String(item.userLanguage || '').split(' ')[0]}</p>
                     <div className="flex justify-between items-center mt-2">
                       <span className="text-cyan-400 font-bold">{item.userPrice} €</span>
                       <div className="flex items-center gap-1">
@@ -1682,8 +1770,8 @@ export default function App() {
                         <button
                           onClick={() => {
                             setSelectedCard(card);
-                            setCardCondition(localStorage.getItem('lastCondition') || 'Near Mint');
-                            setCardLanguage(localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
+                            setCardCondition(loadSetting('lastCondition', '') || 'Near Mint');
+                            setCardLanguage(loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
                             setCardVariant(getAvailableVariants(card)[0].key);
                             setMoveFromWatchlistId(card.id);
                             setRemoveFromWatchlistAfter(true);
@@ -1709,6 +1797,7 @@ export default function App() {
             <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2">
               <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Name oder Name + Nummer, z.B. Glumanda 044" className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
               <input type="text" value={searchSet} onChange={e => setSearchSet(e.target.value)} placeholder="Set (optional)" className="flex-1 bg-slate-900 border border-slate-700 focus:border-cyan-400 text-white rounded-xl px-4 py-3 outline-none" />
+              <button type="button" onClick={() => setScanOpen('search')} title="Karte mit der Kamera scannen" className="bg-slate-900 border border-cyan-500/40 text-cyan-300 font-bold px-4 py-3 rounded-xl hover:bg-slate-800 transition-colors">📷 Scannen</button>
               <button type="submit" disabled={loading} className="bg-cyan-500 text-slate-950 font-bold px-6 py-3 rounded-xl hover:bg-cyan-400 disabled:opacity-50 transition-colors">
                 {loading ? 'Sucht...' : 'Suche'}
               </button>
@@ -1819,6 +1908,19 @@ export default function App() {
         </div>
       </nav>
 
+      {scanOpen && (
+        <CardScanner
+          mode={scanOpen}
+          onClose={() => setScanOpen(null)}
+          onResult={handleScanForSearch}
+          onSearch={scanSearch}
+          onPick={handleScanPick}
+          Img={CardImage}
+          series={scanSeries}
+          onSeriesChange={(v) => { setScanSeries(v); saveSetting('scanSeries', v ? '1' : '0'); }}
+        />
+      )}
+
       {modalType && selectedCard && (
         <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
@@ -1903,7 +2005,7 @@ export default function App() {
                 <div>
                   <label className="text-xs text-slate-400">Variante</label>
                   <select value={cardVariant} onChange={e => setCardVariant(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
-                    {VARIANTS.map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
+                    {variantChoices(selectedCard, cardVariant).map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
                   </select>
                 </div>
                 <div className="bg-slate-950 border border-cyan-500/30 p-3 rounded-lg text-center shadow-inner">
@@ -1938,7 +2040,7 @@ export default function App() {
             )}
 
             <div className="flex gap-2 pt-2">
-              <button onClick={() => { setModalType(null); setMoveFromWatchlistId(null); setEditOriginalPrice(''); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              <button onClick={() => { scanFlowRef.current = false; setModalType(null); setMoveFromWatchlistId(null); setEditOriginalPrice(''); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
               {modalType === 'detail' && !selectedCard.docId && selectedCard.id && !String(selectedCard.id).startsWith('custom-') && (
                 <button onClick={() => beginAddToCollection(selectedCard)} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">➕ Collection</button>
               )}
