@@ -1,7 +1,7 @@
 // Zusatz-Ansichten für die Collection: Artist, Pokédex und virtuelle Binder.
 // Die Komponenten bekommen alles Nötige per Props aus App.jsx
 // (API-URL, Collection, Watchlist-IDs, Bildkomponente, ...).
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   collection as fsCollection,
   doc,
@@ -9,6 +9,9 @@ import {
   updateDoc,
   deleteDoc,
   deleteField,
+  setDoc,
+  query,
+  where,
   onSnapshot
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
@@ -193,6 +196,62 @@ function CollBtn({ card, onAddColl }) {
   );
 }
 
+// ---------------------------------------------------------------------
+// Eigene Fotos für Binder-Slots mit Karten, die man noch nicht hat.
+// Jedes Foto ist ein eigenes kleines Firestore-Dokument (users/{uid}/binderPhotos/{binderId}_{slot}),
+// NICHT Teil des Binder-Dokuments (das hat nur 1 MiB Platz) und läuft nie über den Render-Server.
+// Das Bild wird vor dem Speichern hart verkleinert und auf ca. 45 KB begrenzt.
+// ---------------------------------------------------------------------
+const MAX_PHOTO_CHARS = 60000; // Länge der Data-URL (≈ 45 KB Bilddaten)
+function shrinkImage(file, maxSide = 420) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Foto konnte nicht gelesen werden.')); };
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let side = maxSide;
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        const scale = Math.min(1, side / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        for (const quality of [0.7, 0.55, 0.4]) {
+          const out = canvas.toDataURL('image/jpeg', quality);
+          if (out.length <= MAX_PHOTO_CHARS) { resolve(out); return; }
+        }
+        side = Math.round(side * 0.8);
+      }
+      reject(new Error('Foto ist zu detailreich – bitte ein anderes versuchen.'));
+    };
+    img.src = url;
+  });
+}
+
+function SlotPhoto({ ui }) {
+  if (!ui) return null;
+  return (
+    <div className="flex items-center gap-3 bg-slate-950 border border-slate-800 rounded-lg p-2">
+      {ui.image
+        ? <img src={ui.image} alt="Eigenes Foto" className="w-12 h-16 object-cover rounded border border-slate-700" />
+        : <div className="w-12 h-16 rounded border border-dashed border-slate-700 flex items-center justify-center text-slate-600 text-lg">📷</div>}
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <p className="text-[11px] text-slate-400">Eigenes Foto für diese Karte, solange du sie noch nicht hast</p>
+        <div className="flex gap-2">
+          <label className={`cursor-pointer text-[11px] font-bold px-2.5 py-1 rounded-md border text-cyan-300 border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500 hover:text-slate-950 ${ui.busy ? 'opacity-60 pointer-events-none' : ''}`}>
+            {ui.busy ? 'Speichere …' : ui.image ? '📷 Ändern' : '📷 Foto hinzufügen'}
+            <input type="file" accept="image/*" className="hidden" disabled={ui.busy} onChange={(ev) => { const f = ev.target.files?.[0]; ev.target.value = ''; if (f) ui.onPick(f); }} />
+          </label>
+          {ui.image && !ui.busy && (
+            <button onClick={ui.onRemove} className="text-[11px] font-bold px-2.5 py-1 rounded-md border text-rose-300 border-rose-500/30 hover:bg-rose-500/20">Entfernen</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
@@ -330,7 +389,7 @@ export function ArtistView({ api, collection, watchIds, onWish, onAddColl, Img, 
 // Detailfenster zu einem Pokémon: Karten aus der Collection + Karten zum Kaufen.
 // Wird vom Pokédex und vom Pokédex-Binder genutzt (onPick = Karte in Slot legen).
 // ---------------------------------------------------------------------
-function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, Img, onClose, onPick, currentId, onClear }) {
+function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, Img, onClose, onPick, currentId, onClear, photoUi }) {
   const res = useJson(api, `/api/dex/${dex.id}`);
   const [filterQ, setFilterQ] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -360,6 +419,7 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, Img, onCl
       {currentId && onClear && (
         <button onClick={onClear} className="w-full text-xs font-bold text-rose-300 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg py-2">Slot leeren</button>
       )}
+      <SlotPhoto ui={photoUi} />
       <input value={filterQ} onChange={(e) => setFilterQ(e.target.value)} placeholder="Filtern nach Set oder Name …" className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
       {res.loading && <Loading text="Lade Karten …" />}
       {res.error && <ErrorBox text={`Karten konnten nicht geladen werden: ${res.error}`} />}
@@ -484,7 +544,7 @@ export function PokedexView({ api, collection, watchIds, onWish, Img, meta }) {
 // ---------------------------------------------------------------------
 // Karten-Auswahl für normale Binder-Slots (Collection oder beliebige Karte)
 // ---------------------------------------------------------------------
-function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current, onPick, onClear, onClose }) {
+function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current, onPick, onClear, onClose, photoUi }) {
   const [tab, setTab] = useState('mine');
   const [q, setQ] = useState('');
   const [sortBy, setSortBy] = useState('name-asc');
@@ -529,6 +589,7 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
       {current && (
         <button onClick={onClear} className="w-full text-xs font-bold text-rose-300 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg py-2">Slot leeren ({current.name})</button>
       )}
+      <SlotPhoto ui={photoUi} />
       <div className="flex gap-2">
         {[['mine', '🎴 Meine Collection'], ['all', '🔍 Alle Karten']].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)} className={`flex-1 py-2 rounded-lg text-xs font-bold border ${tab === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>{label}</button>
@@ -597,6 +658,28 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   const [opening, setOpening] = useState(null); // Slot, dessen Kartendetails gerade geladen werden
   const [error, setError] = useState('');
   const { ids: ownedIds, byId, dexOwned } = useOwned(collection);
+  const [photos, setPhotos] = useState([]);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const cleaned = useRef(new Set());
+
+  // Fotos nur für den gerade geöffneten Binder laden (begrenzt die Lesezugriffe)
+  useEffect(() => {
+    setPhotos([]);
+    if (!uid || !selId) return undefined;
+    return onSnapshot(
+      query(fsCollection(db, 'users', uid, 'binderPhotos'), where('binderId', '==', selId)),
+      (snap) => setPhotos(snap.docs.map((d) => ({ ...d.data(), docId: d.id }))),
+      (err) => {
+        console.warn('Binder-Fotos nicht lesbar:', err.code);
+        if (err.code === 'permission-denied') setError('Keine Berechtigung für Binder-Fotos – bitte die Firestore-Regeln für users/{uid}/binderPhotos freigeben.');
+      }
+    );
+  }, [uid, selId]);
+
+  const photoByIdx = useMemo(() => new Map(photos.filter((p) => p.binderId === selId).map((p) => [Number(p.idx), p])), [photos, selId]);
+  // Foto nur anzeigen, wenn es noch zur Karte im Slot gehört
+  const photoFor = (idx, cardId) => { const p = photoByIdx.get(idx); return p && p.cardId === cardId ? p.image : null; };
+  const photoRef = (idx) => doc(db, 'users', uid, 'binderPhotos', `${selId}_${idx}`);
 
   useEffect(() => {
     if (!uid) return undefined;
@@ -612,6 +695,21 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   }, [uid]);
 
   const b = binders?.find((x) => x.id === selId) || null;
+
+  // Aufräumen, damit nichts liegen bleibt: Foto löschen, wenn der Slot geleert/neu belegt wurde
+  // oder die Karte inzwischen mit eigenem Foto in der Collection liegt (dann steckt das Bild dort).
+  useEffect(() => {
+    if (!b || !uid) return;
+    photos.forEach((p) => {
+      if (p.binderId !== b.id || cleaned.current.has(p.docId)) return;
+      const slot = (b.slots || {})[p.idx];
+      const orphan = !slot || slot.id !== p.cardId;
+      const movedToCollection = !!byId.get(p.cardId)?.customImage;
+      if (!orphan && !movedToCollection) return;
+      cleaned.current.add(p.docId);
+      deleteDoc(doc(db, 'users', uid, 'binderPhotos', p.docId)).catch(() => cleaned.current.delete(p.docId));
+    });
+  }, [photos, b, byId, uid]);
   const per = b ? b.rows * b.cols : 0;
   const slots = b?.slots || {};
   const isDex = b?.type === 'pokedex';
@@ -656,7 +754,11 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   });
   const remove = () => {
     if (!window.confirm(`Binder „${b.name}“ wirklich löschen? Deine Collection bleibt unberührt.`)) return;
-    guard(async () => { await deleteDoc(ref(b.id)); setSelId(null); });
+    guard(async () => {
+      await Promise.all(photos.filter((p) => p.binderId === b.id).map((p) => deleteDoc(doc(db, 'users', uid, 'binderPhotos', p.docId))));
+      await deleteDoc(ref(b.id));
+      setSelId(null);
+    });
   };
 
   // ---------- Binder-Liste ----------
@@ -743,6 +845,24 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   const lastPage = b.pages - 1;
   const curPage = Math.min(page, lastPage);
   const current = slotIdx !== null ? slots[slotIdx] : null;
+  const myPhotos = photos.filter((p) => p.binderId === b.id);
+  const photoKb = Math.round(myPhotos.reduce((sum, p) => sum + (p.image?.length || 0), 0) * 0.75 / 1024);
+  const savePhoto = (idx, cardId, file) => guard(async () => {
+    setPhotoBusy(true);
+    try {
+      const image = await shrinkImage(file);
+      await setDoc(photoRef(idx), { binderId: b.id, idx, cardId, image, updatedAt: Date.now() });
+    } finally { setPhotoBusy(false); }
+  });
+  // Foto-Bereich nur für Slots mit einer Karte, die man (noch) nicht besitzt
+  const photoUi = slotIdx !== null && current && !ownedIds.has(current.id)
+    ? {
+      image: photoFor(slotIdx, current.id),
+      busy: photoBusy,
+      onPick: (file) => savePhoto(slotIdx, current.id, file),
+      onRemove: () => guard(() => deleteDoc(photoRef(slotIdx)))
+    }
+    : null;
 
   return (
     <div className="space-y-4">
@@ -758,7 +878,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
         </div>
         <h3 className="font-bold text-slate-100">{isDex ? '📖' : '📒'} {b.name}</h3>
         <ProgressBar done={s.owned} total={s.used} />
-        <p className="text-[10px] text-slate-500">{s.filled} von {s.used} Slots belegt · {s.owned} in deiner Collection · Wert {eur(s.value)}</p>
+        <p className="text-[10px] text-slate-500">{s.filled} von {s.used} Slots belegt · {s.owned} in deiner Collection · Wert {eur(s.value)}{myPhotos.length > 0 ? ` · 📷 ${myPhotos.length} Fotos (≈ ${photoKb} KB)` : ''}</p>
       </div>
       <MetaBanner meta={isDex ? meta : null} />
 
@@ -785,16 +905,17 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
             const item = byId.get(slot.id);
             // Fehlende Karte: Klick zeigt die Karte (Details + Preisverlauf), das ✎ öffnet wie bisher die Slot-Auswahl
             const viewOnClick = !have && !!onOpenCard;
+            const photo = have ? null : photoFor(idx, slot.id);
             const runWith = async (fn) => {
               setOpening(idx);
-              try { await fn(slot); } finally { setOpening(null); }
+              try { await fn(photo ? { ...slot, customImage: photo } : slot); } finally { setOpening(null); }
             };
             const openDetail = () => runWith(onOpenCard);
             return (
               <div key={i} className="relative w-full aspect-[5/7]">
                 <button onClick={viewOnClick ? openDetail : () => setSlotIdx(idx)} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
-                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : 'opacity-40 grayscale'}`} />
-                  <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : 'fehlt'}</span>
+                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || photo || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : photo ? 'opacity-90' : 'opacity-40 grayscale'}`} />
+                  <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : photo ? 'fehlt 📷' : 'fehlt'}</span>
                   {isDex && <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-950/80 text-slate-300 rounded px-1">#{pad(dexNo)}</span>}
                   {opening === idx && <span className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-cyan-300 text-xs font-bold animate-pulse">Lade …</span>}
                 </button>
@@ -822,7 +943,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           );
         })}
       </div>
-      {onOpenCard && <p className="text-[10px] text-slate-500 text-center">Ausgegraute Karte („fehlt“): Tippen zeigt sie mit Preisverlauf, ＋ legt sie nach dem Kauf direkt in deine Collection (mit Foto-Upload), ✎ ändert oder leert den Slot.</p>}
+      {onOpenCard && <p className="text-[10px] text-slate-500 text-center">Ausgegraute Karte („fehlt“): Tippen zeigt sie mit Preisverlauf, ＋ legt sie nach dem Kauf direkt in deine Collection (mit Foto-Upload), ✎ ändert oder leert den Slot und lässt dich ein eigenes Foto hinzufügen.</p>}
       {isDex && <p className="text-[10px] text-slate-500 text-center">Grün umrandete Slots: Du hast bereits eine Karte dieses Pokémon – tippe auf den Slot, um sie einzusortieren.</p>}
 
       {slotIdx !== null && (isDex ? (
@@ -830,12 +951,12 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           api={api} dex={{ id: dexOf(slotIdx), name: dexMap.get(dexOf(slotIdx))?.name || `#${dexOf(slotIdx)}` }}
           collection={collection} ownedIds={ownedIds} watchIds={watchIds} onWish={onWish} Img={Img}
           onClose={() => setSlotIdx(null)} onPick={(card) => assign(slotIdx, card)}
-          currentId={current?.id} onClear={() => clearSlot(slotIdx)}
+          currentId={current?.id} onClear={() => clearSlot(slotIdx)} photoUi={photoUi}
         />
       ) : (
         <CardPicker
           api={api} collection={collection} ownedIds={ownedIds} watchIds={watchIds} onWish={onWish} Img={Img}
-          current={current} onClose={() => setSlotIdx(null)} onPick={(card) => assign(slotIdx, card)} onClear={() => clearSlot(slotIdx)}
+          current={current} onClose={() => setSlotIdx(null)} onPick={(card) => assign(slotIdx, card)} onClear={() => clearSlot(slotIdx)} photoUi={photoUi}
         />
       ))}
     </div>

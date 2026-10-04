@@ -1088,6 +1088,7 @@ export default function App() {
     setCardCondition(localStorage.getItem('lastCondition') || 'Near Mint');
     setCardLanguage(localStorage.getItem('lastLang') || 'Deutsch 🇩🇪');
     setCardVariant(getAvailableVariants(card)[0].key);
+    setCustomImage(card.customImage || ''); // Foto aus dem Binder-Slot vorbelegen
     if (watchlistIds.has(card.id)) {
       setMoveFromWatchlistId(card.id);
       setRemoveFromWatchlistAfter(true);
@@ -1101,7 +1102,8 @@ export default function App() {
   const addBriefToCollection = async (brief) => {
     if (!brief?.id) return;
     try {
-      beginAddToCollection(await loadFullCard(brief));
+      const full = await loadFullCard(brief);
+      beginAddToCollection(brief.customImage ? { ...full, customImage: brief.customImage } : full);
     } catch (err) {
       alert('Karte konnte nicht geladen werden. Läuft der Server?');
     }
@@ -1112,8 +1114,8 @@ export default function App() {
   const openCardDetail = async (brief) => {
     if (!brief?.id) return;
     try {
-      const card = await loadFullCard(brief);
-      setSelectedCard(card);
+      const full = await loadFullCard(brief);
+      setSelectedCard(brief.customImage ? { ...full, customImage: brief.customImage } : full);
       setMoveFromWatchlistId(null);
       setModalType('detail');
     } catch (err) {
