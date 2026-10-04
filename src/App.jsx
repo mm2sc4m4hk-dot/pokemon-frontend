@@ -17,6 +17,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
+import { ArtistView, PokedexView, BinderView } from './Extras';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -87,6 +88,17 @@ const plainName = (item) => String(item?.name || '').replace(/\s*\[.*\]\s*$/, ''
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const loadSetting = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; } };
 const saveSetting = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* egal */ } };
+
+// Der eine Preis einer Watchlist-Karte: Cardmarket-Trend (Normal), bei reinen Holo-Karten der Holo-Trend.
+// Anzeige und Zielpreis-Alarm nutzen genau diesen Wert.
+const watchPrice = (card) => {
+  const p = card?.cardmarket?.prices || {};
+  return p.trendPrice || p.averageSellPrice || p.trendPriceHolo || p.avg1Holo || 0;
+};
+const watchUsesHolo = (card) => {
+  const p = card?.cardmarket?.prices || {};
+  return !(p.trendPrice || p.averageSellPrice) && !!(p.trendPriceHolo || p.avg1Holo);
+};
 
 // Heutiges Datum (UTC, wie bei den bereits gespeicherten Snapshots) als "YYYY-MM-DD" (Dokument-ID der Wertverlauf-Snapshots)
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -497,6 +509,9 @@ export default function App() {
   const [lastRefreshAt, setLastRefreshAt] = useState(null);
   const autoRefreshed = useRef(false);
   const refreshRef = useRef(null);
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [metaMsg, setMetaMsg] = useState('');
+  const metaTried = useRef(false);
 
   useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); } }, [modalType]);
   useEffect(() => { if (customCardOpen) { setCardQuantity('1'); setPurchasePrice(''); } }, [customCardOpen]);
@@ -571,6 +586,8 @@ export default function App() {
         setLastRefreshAt(null);
         setRefreshMsg('');
         autoRefreshed.current = false;
+        metaTried.current = false;
+        setMetaMsg('');
       }
       setAuthLoading(false);
     });
@@ -1025,6 +1042,61 @@ export default function App() {
     else addToWatchlistCard(card);
   };
 
+  // Karte aus Artist-/Pokédex-/Binder-Ansicht auf die Watchlist: erst die vollständigen
+  // Daten (inkl. Cardmarket-Preis) vom Backend holen, dann wie gewohnt speichern.
+  const addBriefToWatchlist = async (brief) => {
+    if (!brief?.id || watchlistIds.has(brief.id)) return;
+    if (brief.cardmarket) { await addToWatchlistCard(brief); return; }
+    try {
+      const res = await fetch(`${API_URL}/api/card/${encodeURIComponent(brief.id)}`);
+      if (!res.ok) throw new Error('Status ' + res.status);
+      await addToWatchlistCard(await res.json());
+    } catch (err) {
+      alert('Karte konnte nicht geladen werden. Läuft der Server?');
+    }
+  };
+
+  // Ältere Collection-Karten kennen ihre Pokédex-Nummer und ihren Artist noch nicht -> einmal nachladen
+  const needsMeta = collection.filter((c) => c.id && c.dexId === undefined
+    && !String(c.id).startsWith('custom-') && !String(c.id).startsWith('cm-'));
+
+  const backfillMeta = async () => {
+    if (!auth.currentUser || metaBusy || needsMeta.length === 0) return;
+    const uid = auth.currentUser.uid;
+    const todo = needsMeta;
+    setMetaBusy(true);
+    try {
+      const ids = [...new Set(todo.map((c) => c.id))];
+      const meta = {};
+      for (let i = 0; i < ids.length; i += 40) {
+        setMetaMsg(`Lade Karten-Daten … ${Math.min(i + 40, ids.length)} / ${ids.length}`);
+        const res = await fetch(`${API_URL}/api/card-meta`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: ids.slice(i, i + 40) })
+        });
+        if (!res.ok) throw new Error(`Server antwortet mit Status ${res.status}`);
+        Object.assign(meta, (await res.json()).meta || {});
+      }
+      let batch = writeBatch(db);
+      let ops = 0;
+      for (const item of todo) {
+        const m = meta[item.id];
+        if (!m || !item.docId) continue;
+        batch.update(doc(db, 'users', uid, 'collection', item.docId), { dexId: m.dexId || [], illustrator: m.illustrator || null });
+        ops += 1;
+        if (ops >= 400) { await batch.commit(); batch = writeBatch(db); ops = 0; }
+      }
+      if (ops > 0) await batch.commit();
+      setMetaMsg('Pokédex- und Artist-Daten sind aktuell. ✓');
+    } catch (err) {
+      console.error('Karten-Daten nachladen fehlgeschlagen:', err);
+      setMetaMsg('Nachladen fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    } finally {
+      setMetaBusy(false);
+    }
+  };
+
   const formatAdded = (ts) => ts
     ? new Date(ts).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
     : null;
@@ -1089,8 +1161,8 @@ export default function App() {
   // Watchlist: gleiche Regel wie in der Karten-Anzeige (Trend <= Zielpreis)
   const isDealCard = (card) => {
     const target = parseFloat(card.targetPrice) || 0;
-    const currentTrend = parseFloat(card.cardmarket?.prices?.trendPrice) || parseFloat(calculatePrice(card, 'Poor', CHEAPEST_LANG.name)) || 0;
-    return target > 0 && currentTrend <= target;
+    const currentTrend = watchPrice(card);
+    return target > 0 && currentTrend > 0 && currentTrend <= target;
   };
   const dealCount = watchlist.filter(isDealCard).length;
 
@@ -1123,6 +1195,24 @@ export default function App() {
     }, 2500);
     return () => clearTimeout(t);
   }, [isAuthenticated, collectionReady, snapshotsReady, snapshotsDenied, stats.median, totalPieces, collection.length, snapshots]);
+
+  // Beim Öffnen von Binder / Pokédex / Artist fehlende Pokédex-/Artist-Daten einmal automatisch nachladen
+  useEffect(() => {
+    if (!isAuthenticated || !collectionReady || activeTab !== 'collection') return;
+    if (!['binder', 'dex', 'artist'].includes(collectionView)) return;
+    if (metaTried.current || metaBusy || needsMeta.length === 0) return;
+    metaTried.current = true;
+    backfillMeta();
+  }, [isAuthenticated, collectionReady, activeTab, collectionView, needsMeta.length]);
+
+  const extraProps = {
+    api: API_URL,
+    collection,
+    watchIds: watchlistIds,
+    onWish: addBriefToWatchlist,
+    Img: CardImage,
+    meta: { needsMeta: needsMeta.length, busy: metaBusy, msg: metaMsg, onBackfill: backfillMeta }
+  };
 
   if (authLoading) {
     return (
@@ -1271,9 +1361,9 @@ export default function App() {
 
         {activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
-            <div className="flex gap-2">
-              {[['cards', '🎴 Karten'], ['sets', '📊 Sets'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`]].map(([key, label]) => (
-                <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {[['cards', '🎴 Karten'], ['binder', '📒 Binder'], ['sets', '📊 Sets'], ['dex', '📖 Pokédex'], ['artist', '🎨 Artist'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`]].map(([key, label]) => (
+                <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
               ))}
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
@@ -1321,6 +1411,12 @@ export default function App() {
 
             {collectionView === 'sets' ? (
               <SetsView collection={collection} />
+            ) : collectionView === 'binder' ? (
+              <BinderView {...extraProps} />
+            ) : collectionView === 'dex' ? (
+              <PokedexView {...extraProps} />
+            ) : collectionView === 'artist' ? (
+              <ArtistView {...extraProps} />
             ) : collectionView === 'sell' ? (
               <SellView items={collection.filter(i => i.forSale)} />
             ) : filteredCollection.length === 0 ? (
@@ -1376,11 +1472,9 @@ export default function App() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {[...watchlist].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).map((card) => {
-                  const minPrice = calculatePrice(card, 'Poor', CHEAPEST_LANG.name);
-                  const maxPrice = calculatePrice(card, 'Mint', PREMIUM_LANG.name);
                   const target = parseFloat(card.targetPrice) || 0;
-                  const currentTrend = parseFloat(card.cardmarket?.prices?.trendPrice) || parseFloat(minPrice) || 0;
-                  const isDeal = target > 0 && currentTrend <= target;
+                  const currentTrend = watchPrice(card);
+                  const isDeal = target > 0 && currentTrend > 0 && currentTrend <= target;
 
                   return (
                     <div key={card.id} className={`bg-slate-900 border ${isDeal ? 'border-emerald-500 shadow-lg shadow-emerald-500/10' : 'border-slate-800 hover:border-cyan-500/50'} rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors`}>
@@ -1408,8 +1502,9 @@ export default function App() {
                         </div>
 
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-xs text-cyan-400">Min {minPrice}€ – Max {maxPrice}€</p>
-                          {getTrendIcon(card)}
+                          <p className="text-sm font-bold text-cyan-400">{eur(currentTrend)}</p>
+                          <span className="text-[10px] text-slate-500">Cardmarket-Trend{watchUsesHolo(card) ? ' (Holo)' : ''}</span>
+                          {getTrendIcon(card, watchUsesHolo(card) ? 'holo' : 'normal')}
                         </div>
                       </div>
                       <div className="flex flex-col items-stretch gap-2">
