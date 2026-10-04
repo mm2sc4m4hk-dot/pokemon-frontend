@@ -17,7 +17,7 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { ArtistView, PokedexView, BinderView, SORT_OPTIONS, sortCollection } from './Extras';
+import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 
 // Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
@@ -111,6 +111,18 @@ const samePrices = (a = {}, b = {}) => {
   return true;
 };
 const hasPrice = (p = {}) => (p.trendPrice || p.averageSellPrice || p.trendPriceHolo || 0) > 0;
+
+// Watchlist: ist die Karte HEUTE günstiger geworden? Verglichen wird mit dem Preis vor der ersten
+// Änderung des heutigen Tages (prevPrice/priceDay werden beim Preis-Update gespeichert).
+const dropInfo = (card) => {
+  const cur = watchPrice(card);
+  const prev = Number(card?.prevPrice) || 0;
+  if (!(cur > 0) || !(prev > 0) || card.priceDay !== todayKey()) return null;
+  const diff = cur - prev;
+  if (diff > -0.005) return null;
+  const target = parseFloat(card.targetPrice) || 0;
+  return { card, cur, prev, diff, pct: (diff / prev) * 100, target, targetDiff: target > 0 ? cur - target : null };
+};
 
 // Liniendiagramm für den Wertverlauf der Collection (reines SVG, keine Bibliothek).
 function ValueChart({ points }) {
@@ -516,6 +528,20 @@ export default function App() {
   useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); } }, [modalType]);
   useEffect(() => { if (customCardOpen) { setCardQuantity('1'); setPurchasePrice(''); } }, [customCardOpen]);
 
+  // Ping: hält das Render-Backend wach (Gratisplan schläft nach ~15 Min. ohne Anfrage ein).
+  // Läuft beim Start (weckt den Server schon während man sich einloggt) und danach alle 9 Minuten,
+  // solange die App im Vordergrund geöffnet ist.
+  useEffect(() => {
+    const ping = () => {
+      if (document.visibilityState === 'hidden') return;
+      fetch(`${API_URL}/api/health`, { cache: 'no-store' }).catch(() => {});
+    };
+    ping();
+    const timer = setInterval(ping, 9 * 60 * 1000);
+    document.addEventListener('visibilitychange', ping);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', ping); };
+  }, []);
+
   useEffect(() => {
     setDetailVariant(selectedCard?.userVariant || 'normal');
   }, [selectedCard]);
@@ -871,7 +897,15 @@ export default function App() {
         if (!f?.prices) continue;
         if (!hasPrice(f.prices) && hasPrice(card.cardmarket?.prices)) continue;
         if (samePrices(f.prices, card.cardmarket?.prices)) continue;
-        batch.update(doc(db, 'users', uid, 'watchlist', card.id), { cardmarket: merged(card, f), priceUpdatedAt: Date.now() });
+        const upd = { cardmarket: merged(card, f), priceUpdatedAt: Date.now() };
+        // Preis vor der ersten Änderung des heutigen Tages merken -> „Heute günstiger geworden“
+        const today = todayKey();
+        if (card.priceDay !== today) {
+          const before = watchPrice(card);
+          upd.prevPrice = before > 0 ? before : null;
+          upd.priceDay = today;
+        }
+        batch.update(doc(db, 'users', uid, 'watchlist', card.id), upd);
         ops += 1; changedWatch += 1;
         if (ops >= 400) await flush();
       }
@@ -1216,6 +1250,40 @@ export default function App() {
     return target > 0 && currentTrend > 0 && currentTrend <= target;
   };
   const dealCount = watchlist.filter(isDealCard).length;
+  const todaysDrops = useMemo(
+    () => watchlist.map(dropInfo).filter(Boolean).sort((a, b) => a.pct - b.pct),
+    [watchlist]
+  );
+  const hasPriceHistory = watchlist.some((c) => c.priceDay);
+
+  // Diagramme im Profil: Top 10 teuerste Karten und Wert pro Set
+  const topCards = useMemo(() => [...collection]
+    .sort((a, b) => (parseFloat(b.userPrice) || 0) - (parseFloat(a.userPrice) || 0))
+    .slice(0, 10)
+    .map((c, i) => ({
+      key: c.docId || i,
+      label: `${i + 1}. ${plainName(c)}`,
+      value: parseFloat(c.userPrice) || 0,
+      sub: [c.set?.name, qtyOf(c) > 1 ? `×${qtyOf(c)}` : null].filter(Boolean).join(' · ')
+    })), [collection]);
+
+  const setValues = useMemo(() => {
+    const m = new Map();
+    collection.forEach((c) => {
+      const name = c.set?.name || 'Ohne Set';
+      const g = m.get(name) || { value: 0, cards: 0 };
+      g.value += (parseFloat(c.userPrice) || 0) * qtyOf(c);
+      g.cards += qtyOf(c);
+      m.set(name, g);
+    });
+    const rows = [...m.entries()]
+      .map(([name, g]) => ({ key: name, label: name, value: g.value, sub: `${g.cards} Karten` }))
+      .sort((a, b) => b.value - a.value);
+    const top = rows.slice(0, 10);
+    const rest = rows.slice(10).reduce((sum, r) => sum + r.value, 0);
+    if (rest > 0) top.push({ key: '__rest', label: `Weitere ${rows.length - 10} Sets`, value: rest });
+    return top;
+  }, [collection]);
 
   // Einmal pro Sitzung automatisch Preise auffrischen (höchstens alle 12 Stunden)
   useEffect(() => {
@@ -1409,6 +1477,19 @@ export default function App() {
                 <ValueChart points={snapshots.map((s) => ({ date: s.date, value: s.value }))} />
               )}
             </div>
+
+            {collection.length > 0 && (
+              <>
+                <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+                  <h3 className="font-bold text-slate-100 text-sm mb-3">🏆 Top 10 – wertvollste Karten</h3>
+                  <HBars rows={topCards} />
+                </div>
+                <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+                  <h3 className="font-bold text-slate-100 text-sm mb-3">📦 Wert pro Set</h3>
+                  <HBars rows={setValues} />
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1511,6 +1592,43 @@ export default function App() {
 
         {activeTab === 'watchlist' && (
           <div className="space-y-4 fade-in">
+            {todaysDrops.length > 0 && (
+              <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
+                <h3 className="text-sm font-black text-emerald-300">📉 Heute günstiger geworden ({todaysDrops.length})</h3>
+                <div className="space-y-2">
+                  {todaysDrops.map((d) => (
+                    <button
+                      key={d.card.id}
+                      onClick={() => { setSelectedCard(d.card); setModalType('detail'); }}
+                      className="w-full text-left flex items-center gap-3 bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-lg p-2 transition-colors"
+                    >
+                      <CardImage src={d.card.images?.small} alt={d.card.name} className="w-10 rounded" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-slate-100 truncate">{plainName(d.card)}</p>
+                        <p className="text-[10px] text-slate-500 truncate">{d.card.set?.name || 'Unbekannt'}</p>
+                        <p className="text-[11px] text-emerald-400 font-bold">{fmtSigned(d.diff)} zum Vortag (−{Math.abs(d.pct).toFixed(1).replace('.', ',')} %)</p>
+                        {d.target > 0 ? (
+                          <p className={`text-[11px] font-bold ${d.targetDiff <= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                            {d.targetDiff <= 0
+                              ? `🎯 ${Math.abs(d.targetDiff).toFixed(2)} € unter dem Zielpreis (${eur(d.target)})`
+                              : `noch ${d.targetDiff.toFixed(2)} € über dem Zielpreis (${eur(d.target)})`}
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-slate-500">Kein Zielpreis gesetzt</p>
+                        )}
+                      </div>
+                      <div className="text-right whitespace-nowrap">
+                        <p className="text-sm font-black text-cyan-300">{eur(d.cur)}</p>
+                        <p className="text-[10px] text-slate-500 line-through">{eur(d.prev)}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {todaysDrops.length === 0 && watchlist.length > 0 && !hasPriceHistory && (
+              <p className="text-[11px] text-slate-500 text-center">Der Vergleich „Heute günstiger geworden“ startet mit dem nächsten Preis-Update, bei dem sich ein Preis ändert (Cardmarket aktualisiert einmal täglich).</p>
+            )}
             {watchlist.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Deine Watchlist ist leer.</div>
             ) : (
@@ -1693,7 +1811,7 @@ export default function App() {
       </nav>
 
       {modalType && selectedCard && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
             <div className="flex gap-4 mb-4">
               <CardImage src={selectedCard.customImage || selectedCard.images?.small} alt={selectedCard.name} className="w-24 rounded-lg shadow-lg" />
@@ -1817,7 +1935,7 @@ export default function App() {
       )}
 
       {customCardOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[70] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-900 border border-cyan-500/40 rounded-2xl max-w-sm w-full p-5 shadow-2xl overflow-y-auto max-h-[90vh]">
             <h3 className="font-bold text-lg text-slate-100 mb-1">Eigene Karte anlegen</h3>
             <p className="text-[10px] text-slate-500 mb-3">Für Karten außerhalb der Datenbank.</p>

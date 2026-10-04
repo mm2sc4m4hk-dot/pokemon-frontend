@@ -10,6 +10,7 @@ import {
   deleteDoc,
   deleteField,
   setDoc,
+  writeBatch,
   query,
   where,
   onSnapshot
@@ -145,6 +146,28 @@ function ProgressBar({ done, total }) {
       <div className="w-full bg-slate-950 rounded-full h-2 overflow-hidden border border-slate-800">
         <div className="bg-gradient-to-r from-cyan-500 to-teal-400 h-full rounded-full" style={{ width: `${pct}%` }} />
       </div>
+    </div>
+  );
+}
+
+// Einfaches Balkendiagramm (reines HTML/CSS): rows = [{ key, label, value, sub }]
+export function HBars({ rows, empty = 'Noch keine Daten.' }) {
+  const max = Math.max(0, ...rows.map((r) => r.value));
+  if (!rows.length || max <= 0) return <p className="text-xs text-slate-500">{empty}</p>;
+  return (
+    <div className="space-y-2">
+      {rows.map((r, i) => (
+        <div key={r.key ?? i} className="text-[11px]">
+          <div className="flex justify-between gap-2 mb-0.5">
+            <span className="text-slate-300 truncate">{r.label}</span>
+            <span className="text-cyan-300 font-bold whitespace-nowrap">{eur(r.value)}</span>
+          </div>
+          <div className="h-2 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+            <div className="h-full bg-gradient-to-r from-cyan-500 to-teal-400 rounded-full" style={{ width: `${Math.max(2, (r.value / max) * 100)}%` }} />
+          </div>
+          {r.sub && <p className="text-[9px] text-slate-500 mt-0.5 truncate">{r.sub}</p>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -389,7 +412,7 @@ export function ArtistView({ api, collection, watchIds, onWish, onAddColl, Img, 
 // Detailfenster zu einem Pokémon: Karten aus der Collection + Karten zum Kaufen.
 // Wird vom Pokédex und vom Pokédex-Binder genutzt (onPick = Karte in Slot legen).
 // ---------------------------------------------------------------------
-function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, Img, onClose, onPick, currentId, onClear, photoUi }) {
+function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl, Img, onClose, onPick, currentId, onClear, photoUi }) {
   const res = useJson(api, `/api/dex/${dex.id}`);
   const [filterQ, setFilterQ] = useState('');
   const [showAll, setShowAll] = useState(false);
@@ -457,6 +480,7 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, Img, onCl
                     <button onClick={() => onPick(toSlot(c))} className="w-full text-[10px] font-bold rounded-md py-1 border text-cyan-300 border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500 hover:text-slate-950">📌 In Slot</button>
                   )}
                   <WishBtn card={c} watchIds={watchIds} onWish={onWish} />
+                  {!onPick && <CollBtn card={c} onAddColl={onAddColl} />}
                 </div>
               ))}
             </div>
@@ -473,7 +497,7 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, Img, onCl
 // ---------------------------------------------------------------------
 // POKÉDEX: welche Pokémon sind (mit mindestens einer Karte) in der Collection?
 // ---------------------------------------------------------------------
-export function PokedexView({ api, collection, watchIds, onWish, Img, meta }) {
+export function PokedexView({ api, collection, watchIds, onWish, onAddColl, Img, meta }) {
   const dex = useJson(api, '/api/pokedex');
   const [gen, setGen] = useState(0);
   const [status, setStatus] = useState('all'); // all | owned | missing
@@ -535,7 +559,7 @@ export function PokedexView({ api, collection, watchIds, onWish, Img, meta }) {
       )}
 
       {open && (
-        <DexDetail api={api} dex={open} collection={collection} ownedIds={ownedIds} watchIds={watchIds} onWish={onWish} Img={Img} onClose={() => setOpen(null)} />
+        <DexDetail api={api} dex={open} collection={collection} ownedIds={ownedIds} watchIds={watchIds} onWish={onWish} onAddColl={onAddColl} Img={Img} onClose={() => setOpen(null)} />
       )}
     </div>
   );
@@ -645,6 +669,154 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
 }
 
 // ---------------------------------------------------------------------
+// Binder-Seite als Bild (PNG) zeichnen – für „Teilen“. Kartenbilder werden zuerst direkt
+// (mit CORS) geladen, sonst über den Bild-Proxy des Backends (/api/img). Klappt beides nicht,
+// wird ein Platzhalter mit dem Kartennamen gezeichnet statt abzubrechen.
+// ---------------------------------------------------------------------
+function loadImage(api, src) {
+  return new Promise((resolve) => {
+    if (!src) return resolve(null);
+    const attempt = (url, next) => {
+      const im = new Image();
+      if (!url.startsWith('data:')) im.crossOrigin = 'anonymous';
+      im.onload = () => resolve(im);
+      im.onerror = () => (next ? next() : resolve(null));
+      im.src = url;
+    };
+    if (src.startsWith('data:')) return attempt(src, null);
+    attempt(src, () => attempt(`${api}/api/img?u=${encodeURIComponent(src)}`, null));
+  });
+}
+
+function roundRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function fitText(ctx, text, maxW) {
+  let t = String(text || '');
+  if (ctx.measureText(t).width <= maxW) return t;
+  while (t.length > 1 && ctx.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+  return `${t}…`;
+}
+
+async function renderBinderPage({ api, b, pageIdx, per, used, slots, isDex, ownedIds, byId, photoFor, dexOf, dexMap, owned, value }) {
+  const CW = 240, CH = 336, GAP = 14, PAD = 28, HEAD = 100, FOOT = 44;
+  const W = PAD * 2 + b.cols * CW + (b.cols - 1) * GAP;
+  const H = HEAD + b.rows * CH + (b.rows - 1) * GAP + FOOT + PAD;
+
+  const cells = [];
+  for (let i = 0; i < per; i += 1) {
+    const idx = pageIdx * per + i;
+    if (idx >= used) break;
+    const slot = slots[idx];
+    let src = null; let have = false;
+    if (slot) {
+      const item = byId.get(slot.id);
+      have = ownedIds.has(slot.id);
+      src = have ? (item?.customImage || item?.images?.small || slot.image) : (photoFor(idx, slot.id) || slot.image);
+    }
+    cells.push({ i, idx, slot, have, src });
+  }
+  const imgs = await Promise.all(cells.map((c) => loadImage(api, c.src)));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#020617'; ctx.fillRect(0, 0, W, H);
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#e2e8f0'; ctx.font = '800 30px system-ui, -apple-system, sans-serif';
+  ctx.fillText(fitText(ctx, b.name, W - PAD * 2), PAD, 48);
+  ctx.fillStyle = '#22d3ee'; ctx.font = '600 17px system-ui, -apple-system, sans-serif';
+  ctx.fillText(`Seite ${pageIdx + 1} / ${b.pages}  ·  ${owned} von ${used} Karten vorhanden  ·  Binder-Wert ${eur(value)}`, PAD, 78);
+
+  cells.forEach((c, n) => {
+    const col = c.i % b.cols; const row = Math.floor(c.i / b.cols);
+    const x = PAD + col * (CW + GAP); const y = HEAD + row * (CH + GAP);
+    const im = imgs[n];
+    ctx.save();
+    roundRectPath(ctx, x, y, CW, CH, 12);
+    if (!c.slot) {
+      ctx.fillStyle = '#0f172a'; ctx.fill();
+      ctx.setLineDash([8, 6]); ctx.strokeStyle = '#334155'; ctx.lineWidth = 2; ctx.stroke(); ctx.setLineDash([]);
+      if (isDex) {
+        const no = dexOf(c.idx);
+        ctx.fillStyle = '#64748b'; ctx.textAlign = 'center';
+        ctx.font = '700 22px system-ui, sans-serif'; ctx.fillText(`#${pad(no)}`, x + CW / 2, y + CH / 2 - 4);
+        ctx.font = '500 16px system-ui, sans-serif'; ctx.fillText(fitText(ctx, dexMap.get(no)?.name || '', CW - 20), x + CW / 2, y + CH / 2 + 22);
+        ctx.textAlign = 'left';
+      }
+      ctx.restore();
+      return;
+    }
+    ctx.clip();
+    ctx.fillStyle = '#1e293b'; ctx.fillRect(x, y, CW, CH);
+    if (im) {
+      ctx.globalAlpha = c.have ? 1 : 0.4;
+      ctx.drawImage(im, x, y, CW, CH);
+      ctx.globalAlpha = 1;
+    } else {
+      ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'center'; ctx.font = '600 18px system-ui, sans-serif';
+      ctx.fillText(fitText(ctx, c.slot.name, CW - 24), x + CW / 2, y + CH / 2);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+    // Rahmen + Badge
+    ctx.save();
+    roundRectPath(ctx, x, y, CW, CH, 12);
+    ctx.strokeStyle = c.have ? '#10b981' : '#334155'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+    const label = c.have ? '✓' : 'fehlt';
+    ctx.font = '800 16px system-ui, sans-serif';
+    const bw = ctx.measureText(label).width + 16;
+    roundRectPath(ctx, x + 8, y + CH - 32, bw, 24, 6);
+    ctx.fillStyle = c.have ? '#10b981' : 'rgba(2,6,23,0.85)'; ctx.fill();
+    ctx.fillStyle = c.have ? '#022c22' : '#fcd34d';
+    ctx.fillText(label, x + 16, y + CH - 14);
+    if (isDex) {
+      const tag = `#${pad(dexOf(c.idx))}`;
+      ctx.font = '700 14px system-ui, sans-serif';
+      const tw = ctx.measureText(tag).width + 12;
+      roundRectPath(ctx, x + 8, y + 8, tw, 22, 6);
+      ctx.fillStyle = 'rgba(2,6,23,0.85)'; ctx.fill();
+      ctx.fillStyle = '#cbd5e1'; ctx.fillText(tag, x + 14, y + 24);
+    }
+  });
+
+  ctx.fillStyle = '#475569'; ctx.font = '500 13px system-ui, sans-serif';
+  ctx.fillText(`PokéTracker · ${new Date().toLocaleDateString('de-DE')}`, PAD, H - PAD + 4);
+
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'));
+}
+
+// Druck-Ansicht: nur die Binder-Seite bzw. die Fehlt-Liste wird gedruckt, alles andere ausgeblendet
+const PRINT_CSS = `
+.print-only { display: none; }
+@media print {
+  body[data-print] * { visibility: hidden !important; }
+  body[data-print="binder"] #binder-print, body[data-print="binder"] #binder-print * { visibility: visible !important; }
+  body[data-print="missing"] #missing-print, body[data-print="missing"] #missing-print * { visibility: visible !important; }
+  #binder-print, #missing-print { position: absolute !important; left: 0; top: 0; width: 100% !important; background: #fff !important; color: #000 !important; padding: 8mm; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #binder-print .binder-grid { background: #f1f5f9 !important; border-color: #cbd5e1 !important; }
+  #missing-print, #missing-print * { color: #000 !important; background: transparent !important; border-color: #ccc !important; }
+  .no-print { display: none !important; }
+  .print-only { display: block !important; }
+}`;
+
+function printSection(kind) {
+  document.body.dataset.print = kind;
+  const done = () => { delete document.body.dataset.print; window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  setTimeout(() => window.print(), 60);
+}
+
+// ---------------------------------------------------------------------
 // BINDER: virtuelle Sammelalben (normal oder als Pokédex-Binder)
 // ---------------------------------------------------------------------
 export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpenCard, Img, meta }) {
@@ -661,6 +833,14 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   const [photos, setPhotos] = useState([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const cleaned = useRef(new Set());
+  const [arrange, setArrange] = useState(false);        // Anordnen-Modus (Drag & Drop)
+  const [drag, setDrag] = useState(null);                // { from, x, y, over }
+  const [showMissing, setShowMissing] = useState(false); // Fehlt-Liste einblenden
+  const [busyShare, setBusyShare] = useState(false);
+  const [tick, setTick] = useState(0);
+  const dragInfo = useRef(null);
+  const flipRef = useRef({ dir: null, timer: null });
+  const moveRef = useRef(null);
 
   // Fotos nur für den gerade geöffneten Binder laden (begrenzt die Lesezugriffe)
   useEffect(() => {
@@ -696,12 +876,18 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
 
   const b = binders?.find((x) => x.id === selId) || null;
 
+  useEffect(() => () => {
+    if (dragInfo.current?.cleanup) dragInfo.current.cleanup();
+    clearTimeout(flipRef.current.timer);
+  }, []);
+
   // Aufräumen, damit nichts liegen bleibt: Foto löschen, wenn der Slot geleert/neu belegt wurde
   // oder die Karte inzwischen mit eigenem Foto in der Collection liegt (dann steckt das Bild dort).
   useEffect(() => {
     if (!b || !uid) return;
     photos.forEach((p) => {
       if (p.binderId !== b.id || cleaned.current.has(p.docId)) return;
+      if (Date.now() - (p.updatedAt || 0) < 6000) return; // gerade erst geschrieben / verschoben
       const slot = (b.slots || {})[p.idx];
       const orphan = !slot || slot.id !== p.cardId;
       const movedToCollection = !!byId.get(p.cardId)?.customImage;
@@ -709,7 +895,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
       cleaned.current.add(p.docId);
       deleteDoc(doc(db, 'users', uid, 'binderPhotos', p.docId)).catch(() => cleaned.current.delete(p.docId));
     });
-  }, [photos, b, byId, uid]);
+  }, [photos, b, byId, uid, tick]);
   const per = b ? b.rows * b.cols : 0;
   const slots = b?.slots || {};
   const isDex = b?.type === 'pokedex';
@@ -759,6 +945,78 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
       await deleteDoc(ref(b.id));
       setSelId(null);
     });
+  };
+
+  // ---------- Slots verschieben (Drag & Drop) ----------
+  // Leerer Zielslot: Karte wandert dorthin. Belegter Zielslot: beide tauschen. Eigene Fotos wandern mit.
+  const moveSlot = (from, to) => guard(async () => {
+    if (!b || from === to) return;
+    const a = slots[from]; const t = slots[to];
+    if (!a) return;
+    const batch = writeBatch(db);
+    batch.update(ref(b.id), { [`slots.${to}`]: a, [`slots.${from}`]: t || deleteField() });
+    const pa = photoFor(from, a.id) ? photoByIdx.get(from) : null;
+    const pt = t && photoFor(to, t.id) ? photoByIdx.get(to) : null;
+    const next = new Map();
+    if (pa) next.set(to, { binderId: b.id, idx: to, cardId: a.id, image: pa.image, updatedAt: Date.now() });
+    if (pt) next.set(from, { binderId: b.id, idx: from, cardId: t.id, image: pt.image, updatedAt: Date.now() });
+    [from, to].forEach((i) => {
+      if (next.has(i)) batch.set(photoRef(i), next.get(i));
+      else if (photoByIdx.has(i)) batch.delete(photoRef(i));
+    });
+    await batch.commit();
+    setTick((x) => x + 1);
+    setTimeout(() => setTick((x) => x + 1), 6500);
+  });
+  moveRef.current = moveSlot;
+
+  const clearFlip = () => { clearTimeout(flipRef.current.timer); flipRef.current = { dir: null, timer: null }; };
+
+  const startDrag = (e, idx) => {
+    if (!arrange || !slots[idx] || e.button > 0) return;
+    e.preventDefault();
+    const pagesCount = b.pages;
+    dragInfo.current = { from: idx, over: idx };
+    setDrag({ from: idx, x: e.clientX, y: e.clientY, over: idx });
+
+    const move = (ev) => {
+      const d = dragInfo.current; if (!d) return;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      const cell = el && el.closest ? el.closest('[data-slot]') : null;
+      const flipEl = el && el.closest ? el.closest('[data-flip]') : null;
+      const flip = flipEl ? flipEl.dataset.flip : null;
+      d.over = cell ? Number(cell.dataset.slot) : null;
+      setDrag({ from: d.from, x: ev.clientX, y: ev.clientY, over: d.over });
+      if (flip !== flipRef.current.dir) {
+        clearFlip();
+        if (flip) {
+          const step = () => {
+            setPage((p) => Math.max(0, Math.min(pagesCount - 1, p + (flip === 'next' ? 1 : -1))));
+            flipRef.current.timer = setTimeout(step, 800);
+          };
+          flipRef.current = { dir: flip, timer: setTimeout(step, 500) };
+        }
+      }
+    };
+    const finish = (ev, cancelled) => {
+      const d = dragInfo.current;
+      cleanup();
+      if (!cancelled && d && d.over !== null && d.over !== d.from && moveRef.current) moveRef.current(d.from, d.over);
+    };
+    const up = (ev) => finish(ev, false);
+    const cancel = (ev) => finish(ev, true);
+    const cleanup = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      clearFlip();
+      dragInfo.current = null;
+      setDrag(null);
+    };
+    dragInfo.current.cleanup = cleanup;
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
   };
 
   // ---------- Binder-Liste ----------
@@ -820,6 +1078,12 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           <button onClick={() => setCreating(true)} className="w-full py-3 rounded-xl border-2 border-dashed border-slate-700 text-cyan-400 font-bold text-sm hover:border-cyan-500">＋ Neuen Binder erstellen</button>
         )}
 
+        {binders && binders.length > 1 && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2 shadow-md">
+            <h3 className="font-bold text-slate-100 text-sm">📊 Wert pro Binder</h3>
+            <HBars rows={binders.map((bd) => ({ key: bd.id, label: bd.name, value: statsOf(bd).value, sub: `${statsOf(bd).owned} von ${statsOf(bd).used} Karten vorhanden` })).sort((x, y) => y.value - x.value)} />
+          </div>
+        )}
         {binders && binders.length === 0 && !creating && <div className="text-center py-12 text-slate-500 text-sm">Noch kein Binder. Erstelle einen Karten-Binder oder einen Pokédex-Binder.</div>}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {(binders || []).map((bd) => {
@@ -845,6 +1109,62 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
   const lastPage = b.pages - 1;
   const curPage = Math.min(page, lastPage);
   const current = slotIdx !== null ? slots[slotIdx] : null;
+
+  // Fehlt-Liste: belegte Slots, deren Karte noch nicht in der Collection ist (bei Pokédex-Bindern auch Pokémon ohne jede Karte)
+  const missing = [];
+  for (let idx = 0; idx < s.used; idx += 1) {
+    const slot = slots[idx];
+    const row = { idx, pageNo: Math.floor(idx / per) + 1, pos: (idx % per) + 1 };
+    if (slot) { if (!ownedIds.has(slot.id)) missing.push({ ...row, slot }); }
+    else if (isDex && !dexOwned.has(dexOf(idx))) missing.push({ ...row, slot: null, dexNo: dexOf(idx) });
+  }
+  const missingLine = (m) => (m.slot
+    ? `S. ${m.pageNo} / Platz ${m.pos}: ${m.slot.name}${m.slot.setName ? ` (${m.slot.setName}${m.slot.localId ? ` #${m.slot.localId}` : ''})` : ''}`
+    : `S. ${m.pageNo} / Platz ${m.pos}: #${pad(m.dexNo)} ${dexMap.get(m.dexNo)?.name || ''} (noch keine Karte gewählt)`);
+  const copyMissing = async () => {
+    const text = `Fehlt-Liste „${b.name}“ (${missing.length})\n` + missing.map(missingLine).join('\n');
+    try { await navigator.clipboard.writeText(text); setError(''); window.alert('Fehlt-Liste in die Zwischenablage kopiert.'); }
+    catch (e) { window.prompt('Zum Kopieren markieren:', text); }
+  };
+
+  // Wert pro Seite (nur Karten, die du besitzt)
+  const pageValues = Array.from({ length: b.pages }, (_, pi) => {
+    let v = 0; let n = 0;
+    for (let i = 0; i < per; i += 1) {
+      const idx = pi * per + i;
+      if (idx >= s.used) break;
+      const sl = slots[idx];
+      if (sl && ownedIds.has(sl.id)) { v += parseFloat(byId.get(sl.id)?.userPrice) || 0; n += 1; }
+    }
+    return { key: pi, label: `Seite ${pi + 1}`, value: v, sub: `${n} Karten vorhanden` };
+  }).filter((r) => r.value > 0);
+  const pageValue = pageValues.find((r) => r.key === curPage)?.value || 0;
+
+  const shareImage = async () => {
+    setBusyShare(true); setError('');
+    try {
+      const blob = await renderBinderPage({
+        api, b, pageIdx: curPage, per, used: s.used, slots, isDex, ownedIds, byId, photoFor, dexOf, dexMap, owned: s.owned, value: s.value
+      });
+      if (!blob) throw new Error('Das Bild konnte nicht erzeugt werden.');
+      const fileName = `${(b.name || 'binder').replace(/[^\w\-äöüÄÖÜß]+/g, '-')}-seite-${curPage + 1}.png`;
+      const file = new File([blob], fileName, { type: 'image/png' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: b.name }); return; }
+        catch (e) { if (e && e.name === 'AbortError') return; /* sonst: als Download speichern */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (e) {
+      console.error(e);
+      setError('Bild erstellen fehlgeschlagen: ' + (e.message || 'Unbekannter Fehler'));
+    } finally { setBusyShare(false); }
+  };
+
+  const ghostSlot = drag ? slots[drag.from] : null;
+  const ghostSrc = ghostSlot && (byId.get(ghostSlot.id)?.customImage || byId.get(ghostSlot.id)?.images?.small || photoFor(drag.from, ghostSlot.id) || ghostSlot.image);
   const myPhotos = photos.filter((p) => p.binderId === b.id);
   const photoKb = Math.round(myPhotos.reduce((sum, p) => sum + (p.image?.length || 0), 0) * 0.75 / 1024);
   const savePhoto = (idx, cardId, file) => guard(async () => {
@@ -866,10 +1186,11 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
 
   return (
     <div className="space-y-4">
+      <style>{PRINT_CSS}</style>
       {error && <ErrorBox text={error} />}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3 shadow-md">
+      <div className="no-print bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3 shadow-md">
         <div className="flex items-center justify-between gap-2">
-          <button onClick={() => { setSelId(null); setSlotIdx(null); }} className="text-xs text-cyan-400 font-bold hover:underline">← Alle Binder</button>
+          <button onClick={() => { setSelId(null); setSlotIdx(null); setArrange(false); setShowMissing(false); }} className="text-xs text-cyan-400 font-bold hover:underline">← Alle Binder</button>
           <div className="flex gap-3 text-xs">
             <button onClick={rename} className="text-slate-400 hover:text-cyan-400">✏️ Umbenennen</button>
             <button onClick={addPage} className="text-slate-400 hover:text-cyan-400">＋ Seite</button>
@@ -879,11 +1200,30 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
         <h3 className="font-bold text-slate-100">{isDex ? '📖' : '📒'} {b.name}</h3>
         <ProgressBar done={s.owned} total={s.used} />
         <p className="text-[10px] text-slate-500">{s.filled} von {s.used} Slots belegt · {s.owned} in deiner Collection · Wert {eur(s.value)}{myPhotos.length > 0 ? ` · 📷 ${myPhotos.length} Fotos (≈ ${photoKb} KB)` : ''}</p>
+        <div className="flex flex-wrap gap-2 pt-1">
+          {!isDex && (
+            <button onClick={() => setArrange((v) => !v)} className={`text-[11px] font-bold px-3 py-1.5 rounded-full border transition-colors ${arrange ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-300 border-slate-700 hover:border-cyan-500'}`}>↔️ Anordnen{arrange ? ' (an)' : ''}</button>
+          )}
+          <button onClick={() => setShowMissing((v) => !v)} className={`text-[11px] font-bold px-3 py-1.5 rounded-full border transition-colors ${showMissing ? 'bg-amber-500 text-slate-950 border-amber-500' : 'bg-slate-950 text-slate-300 border-slate-700 hover:border-amber-500'}`}>📋 Fehlt-Liste ({missing.length})</button>
+          <button disabled={busyShare} onClick={shareImage} className="text-[11px] font-bold px-3 py-1.5 rounded-full border bg-slate-950 text-slate-300 border-slate-700 hover:border-cyan-500 disabled:opacity-50">{busyShare ? 'Erstelle Bild …' : '🖼️ Seite als Bild'}</button>
+          <button onClick={() => printSection('binder')} className="text-[11px] font-bold px-3 py-1.5 rounded-full border bg-slate-950 text-slate-300 border-slate-700 hover:border-cyan-500">🖨️ Drucken</button>
+        </div>
+        {pageValues.length > 0 && (
+          <details className="text-xs">
+            <summary className="cursor-pointer text-slate-400 hover:text-cyan-400 font-bold">📊 Wert pro Seite (diese Seite: {eur(pageValue)})</summary>
+            <div className="mt-2"><HBars rows={pageValues} /></div>
+          </details>
+        )}
       </div>
-      <MetaBanner meta={isDex ? meta : null} />
+      <div className="no-print"><MetaBanner meta={isDex ? meta : null} /></div>
+      {arrange && (
+        <div className="no-print bg-cyan-500/10 border border-cyan-500/30 text-cyan-200 text-[11px] rounded-xl p-3">
+          Anordnen ist an: Karte antippen &amp; ziehen, auf einem anderen Slot loslassen (leerer Slot = verschieben, belegter Slot = tauschen). Wer am ‹ oder › kurz verweilt, blättert zur nächsten Seite. Zum Scrollen oder Bearbeiten den Modus wieder ausschalten.
+        </div>
+      )}
 
-      <div className="flex items-center justify-between">
-        <button disabled={curPage === 0} onClick={() => setPage(curPage - 1)} className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm font-bold text-slate-300 disabled:opacity-30">‹</button>
+      <div className="no-print flex items-center justify-between">
+        <button data-flip="prev" disabled={curPage === 0} onClick={() => setPage(curPage - 1)} className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm font-bold text-slate-300 disabled:opacity-30">‹</button>
         <div className="text-xs font-bold text-slate-300">
           Seite{' '}
           <select value={curPage} onChange={(e) => setPage(Number(e.target.value))} className="bg-slate-900 border border-slate-700 rounded-md px-2 py-1 text-xs outline-none">
@@ -891,10 +1231,15 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           </select>{' '}
           / {b.pages}
         </div>
-        <button disabled={curPage === lastPage} onClick={() => setPage(curPage + 1)} className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm font-bold text-slate-300 disabled:opacity-30">›</button>
+        <button data-flip="next" disabled={curPage === lastPage} onClick={() => setPage(curPage + 1)} className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 text-sm font-bold text-slate-300 disabled:opacity-30">›</button>
       </div>
 
-      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${b.cols}, minmax(0, 1fr))` }}>
+      <div id="binder-print">
+      <div className="print-only" style={{ marginBottom: '6mm' }}>
+        <h2 style={{ fontSize: '18pt', fontWeight: 800 }}>{b.name}</h2>
+        <p style={{ fontSize: '10pt' }}>Seite {curPage + 1} / {b.pages} · {s.owned} von {s.used} Karten vorhanden · Binder-Wert {eur(s.value)}</p>
+      </div>
+      <div className="binder-grid bg-slate-900/60 border border-slate-800 rounded-2xl p-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${b.cols}, minmax(0, 1fr))` }}>
         {Array.from({ length: per }, (_, i) => {
           const idx = curPage * per + i;
           if (idx >= s.used) return <div key={i} className="aspect-[5/7]" />;
@@ -912,17 +1257,23 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
             };
             const openDetail = () => runWith(onOpenCard);
             return (
-              <div key={i} className="relative w-full aspect-[5/7]">
-                <button onClick={viewOnClick ? openDetail : () => setSlotIdx(idx)} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
+              <div
+                key={i} data-slot={idx}
+                onPointerDown={arrange ? (ev) => startDrag(ev, idx) : undefined}
+                onDragStart={(ev) => ev.preventDefault()}
+                style={arrange ? { touchAction: 'none', cursor: 'grab' } : undefined}
+                className={`relative w-full aspect-[5/7] ${arrange ? 'select-none' : ''} ${drag && drag.from === idx ? 'opacity-30' : ''} ${drag && drag.over === idx && drag.over !== drag.from ? 'ring-2 ring-cyan-400 rounded-md' : ''}`}
+              >
+                <button onClick={arrange ? undefined : (viewOnClick ? openDetail : () => setSlotIdx(idx))} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
                   <Img src={(have && item?.customImage) || (have && item?.images?.small) || photo || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : photo ? 'opacity-90' : 'opacity-40 grayscale'}`} />
                   <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : photo ? 'fehlt 📷' : 'fehlt'}</span>
                   {isDex && <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-950/80 text-slate-300 rounded px-1">#{pad(dexNo)}</span>}
                   {opening === idx && <span className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-cyan-300 text-xs font-bold animate-pulse">Lade …</span>}
                 </button>
-                {viewOnClick && (
+                {viewOnClick && !arrange && (
                   <button onClick={(ev) => { ev.stopPropagation(); setSlotIdx(idx); }} title="Slot ändern oder leeren" className="absolute top-1 right-1 w-5 h-5 rounded-full bg-slate-950/80 text-cyan-400 text-[10px] font-bold border border-cyan-500/30 hover:bg-cyan-500 hover:text-slate-950 transition">✎</button>
                 )}
-                {viewOnClick && onAddColl && (
+                {viewOnClick && !arrange && onAddColl && (
                   <button onClick={(ev) => { ev.stopPropagation(); runWith(onAddColl); }} title="Habe ich jetzt – in die Collection" className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-cyan-500 text-slate-950 text-[10px] font-black border border-cyan-300 hover:bg-cyan-300 transition">＋</button>
                 )}
               </div>
@@ -931,7 +1282,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           const dexInfo = isDex ? dexMap.get(dexNo) : null;
           const canFill = isDex && dexOwned.has(dexNo);
           return (
-            <button key={i} onClick={() => setSlotIdx(idx)} className={`w-full aspect-[5/7] rounded-md border-2 border-dashed flex flex-col items-center justify-center gap-0.5 transition-colors ${canFill ? 'border-emerald-500/60 text-emerald-400' : 'border-slate-700 text-slate-600 hover:border-cyan-500 hover:text-cyan-400'}`}>
+            <button key={i} data-slot={idx} onClick={arrange ? undefined : () => setSlotIdx(idx)} style={arrange ? { touchAction: 'none' } : undefined} className={`w-full aspect-[5/7] rounded-md border-2 border-dashed flex flex-col items-center justify-center gap-0.5 transition-colors ${drag && drag.over === idx ? 'border-cyan-400 text-cyan-400 bg-cyan-500/10' : canFill ? 'border-emerald-500/60 text-emerald-400' : 'border-slate-700 text-slate-600 hover:border-cyan-500 hover:text-cyan-400'}`}>
               {isDex ? (
                 <>
                   <Sprite id={dexNo} className="w-10 h-10" />
@@ -943,8 +1294,37 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           );
         })}
       </div>
-      {onOpenCard && <p className="text-[10px] text-slate-500 text-center">Ausgegraute Karte („fehlt“): Tippen zeigt sie mit Preisverlauf, ＋ legt sie nach dem Kauf direkt in deine Collection (mit Foto-Upload), ✎ ändert oder leert den Slot und lässt dich ein eigenes Foto hinzufügen.</p>}
-      {isDex && <p className="text-[10px] text-slate-500 text-center">Grün umrandete Slots: Du hast bereits eine Karte dieses Pokémon – tippe auf den Slot, um sie einzusortieren.</p>}
+      </div>
+      {showMissing && (
+        <div id="missing-print" className="bg-slate-900 border border-amber-500/30 rounded-xl p-4 space-y-3 shadow-md">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="font-bold text-amber-300 text-sm">📋 Fehlt-Liste „{b.name}“ ({missing.length})</h3>
+            <div className="no-print flex gap-2">
+              <button onClick={copyMissing} disabled={missing.length === 0} className="text-[11px] font-bold px-3 py-1 rounded-full border bg-slate-950 text-slate-300 border-slate-700 hover:border-cyan-500 disabled:opacity-40">Kopieren</button>
+              <button onClick={() => printSection('missing')} disabled={missing.length === 0} className="text-[11px] font-bold px-3 py-1 rounded-full border bg-slate-950 text-slate-300 border-slate-700 hover:border-cyan-500 disabled:opacity-40">Drucken</button>
+            </div>
+          </div>
+          {missing.length === 0 && <p className="text-xs text-emerald-400">Nichts fehlt – alle belegten Slots sind in deiner Collection. 🎉</p>}
+          {Array.from(new Set(missing.map((m) => m.pageNo))).map((pn) => (
+            <div key={pn}>
+              <p className="text-[11px] font-bold text-slate-300 border-b border-slate-800 pb-1 mb-1">Seite {pn}</p>
+              <ul className="space-y-1">
+                {missing.filter((m) => m.pageNo === pn).map((m) => (
+                  <li key={m.idx} className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                    <span className="min-w-0 truncate"><span className="text-slate-500">Platz {m.pos}:</span> {m.slot ? <>{m.slot.name}{m.slot.setName ? <span className="text-slate-500"> · {m.slot.setName}{m.slot.localId ? ` #${m.slot.localId}` : ''}</span> : null}</> : <>#{pad(m.dexNo)} {dexMap.get(m.dexNo)?.name || ''} <span className="text-slate-500">· noch keine Karte gewählt</span></>}</span>
+                    {m.slot && !String(m.slot.id).startsWith('custom-') && <span className="no-print w-24 shrink-0"><WishBtn card={m.slot} watchIds={watchIds} onWish={onWish} /></span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+      {drag && ghostSrc && (
+        <img src={ghostSrc} alt="" style={{ position: 'fixed', left: drag.x - 36, top: drag.y - 50, width: 72, pointerEvents: 'none', zIndex: 90, opacity: 0.9, borderRadius: 6, boxShadow: '0 8px 24px rgba(0,0,0,.5)' }} />
+      )}
+      {onOpenCard && <p className="no-print text-[10px] text-slate-500 text-center">Ausgegraute Karte („fehlt“): Tippen zeigt sie mit Preisverlauf, ＋ legt sie nach dem Kauf direkt in deine Collection (mit Foto-Upload), ✎ ändert oder leert den Slot und lässt dich ein eigenes Foto hinzufügen.</p>}
+      {isDex && <p className="no-print text-[10px] text-slate-500 text-center">Grün umrandete Slots: Du hast bereits eine Karte dieses Pokémon – tippe auf den Slot, um sie einzusortieren.</p>}
 
       {slotIdx !== null && (isDex ? (
         <DexDetail
