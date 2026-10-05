@@ -1829,87 +1829,91 @@ export default function App() {
             <SellerPlanner watchlist={watchlist} uid={auth.currentUser?.uid} />
             <BudgetPlanner watchlist={watchlist} uid={auth.currentUser?.uid} Img={CardImage} />
 
-{/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
-<div className="bg-slate-900/80 border border-cyan-500/30 rounded-xl p-3 shadow-lg mb-4">
-  <div className="flex justify-between items-center">
-    <div className="flex items-center gap-2">
-      <span className="text-lg">📦</span>
-      <div>
-        <h3 className="text-sm font-bold text-slate-100">Booster-Pack Schnell-Eingabe</h3>
-        <p className="text-[10px] text-slate-400">Mehrere Karten aus einem Pack schnell erfassen</p>
-      </div>
-    </div>
-    <button 
-      onClick={() => setBatchAddOpen(!batchAddOpen)}
-      className="text-xs font-bold text-cyan-400 hover:text-cyan-300 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 transition-colors"
-    >
-      {batchAddOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
-    </button>
-  </div>
-
-  {batchAddOpen && (
-    <div className="mt-3 pt-3 border-t border-slate-800">
-      <button
-        onClick={() => setBatchOpen(true)}
-        className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold py-2 px-4 rounded-lg shadow-md hover:brightness-110 transition-all flex items-center justify-center gap-2 text-xs font-bold"
-      >
-        <span>📷</span>
-        <span>Batch-Scanner öffnen & Cards hinzufügen</span>
-      </button>
-    </div>
-  )}
-</div>
-
-{todaysDrops.length > 0 && (
-  <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
-    <div className="flex justify-between items-center">
-      <h3 className="text-sm font-black text-emerald-300">
-        📉 Heute günstiger geworden ({todaysDrops.length})
-      </h3>
-      <button 
-        onClick={() => setDropsOpen(!dropsOpen)}
-        className="text-xs font-bold text-emerald-400 hover:text-emerald-200 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 transition-colors"
-      >
-        {dropsOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
-      </button>
-    </div>
-  </div>
-)}
-          {dropsOpen && (
-            <div className="space-y-2">
-              {todaysDrops.map((d) => (
-                <button
-                  key={d.card.id}
-                  onClick={() => { setSelectedCard(d.card); setModalType('detail'); }}
-                  className="w-full text-left flex items-center gap-3 bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-lg p-2 transition-colors"
+            {/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
+            <div className="bg-slate-900/80 border border-cyan-500/30 rounded-xl p-3 shadow-lg mb-4">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">📦</span>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">Booster-Pack Schnell-Eingabe</h3>
+                    <p className="text-[10px] text-slate-400">Mehrere Karten aus einem Pack schnell erfassen</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setBatchAddOpen(!batchAddOpen)}
+                  className="text-xs font-bold text-cyan-400 hover:text-cyan-300 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 transition-colors"
                 >
-                  <CardImage src={d.card.images?.small} alt={d.card.name} className="w-10 rounded" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-slate-100 truncate">{plainName(d.card)}</p>
-                    <p className="text-[10px] text-slate-500 truncate">{d.card.set?.name || 'Unbekannt'}</p>
-                    <p className="text-[11px] text-emerald-400 font-bold">{fmtSigned(d.diff)} zum Vortag (−{Math.abs(d.pct).toFixed(1).replace('.', ',')} %)</p>
-                    {d.target > 0 ? (
-                      <p className={`text-[11px] font-bold ${d.targetDiff <= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
-                        {d.targetDiff <= 0
-                          ? `🎯 ${Math.abs(d.targetDiff).toFixed(2)} € unter dem Zielpreis (${eur(d.target)})`
-                          : `noch ${d.targetDiff.toFixed(2)} € über dem Zielpreis (${eur(d.target)})`}
-                      </p>
-                    ) : (
-                      <p className="text-[10px] text-slate-500">Kein Zielpreis gesetzt</p>
-                    )}
-                  </div>
-                  <div className="text-right whitespace-nowrap">
-                    <p className="text-sm font-black text-cyan-300">{eur(d.cur)}</p>
-                    <p className="text-[10px] text-slate-500 line-through">{eur(d.prev)}</p>
-                  </div>
+                  {batchAddOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
                 </button>
-              ))}
+              </div>
+
+              {batchAddOpen && (
+                <div className="mt-3 pt-3 border-t border-slate-800">
+                  <button
+                    onClick={() => setBatchOpen(true)}
+                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold py-2 px-4 rounded-lg shadow-md hover:brightness-110 transition-all flex items-center justify-center gap-2 text-xs font-bold"
+                  >
+                    <span>📷</span>
+                    <span>Batch-Scanner öffnen & Cards hinzufügen</span>
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}            {todaysDrops.length === 0 && watchlist.length > 0 && !hasPriceHistory && (
-              <p className="text-[11px] text-slate-500 text-center">Der Vergleich „Heute günstiger geworden“ startet mit dem nächsten Preis-Update, bei dem sich ein Preis ändert (Cardmarket aktualisiert einmal täglich).</p>
+
+            {todaysDrops.length > 0 && (
+              <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-sm font-black text-emerald-300">
+                    📉 Heute günstiger geworden ({todaysDrops.length})
+                  </h3>
+                  <button 
+                    onClick={() => setDropsOpen(!dropsOpen)}
+                    className="text-xs font-bold text-emerald-400 hover:text-emerald-200 px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 transition-colors"
+                  >
+                    {dropsOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
+                  </button>
+                </div>
+
+                {dropsOpen && (
+                  <div className="space-y-2 pt-2 border-t border-emerald-500/20">
+                    {todaysDrops.map((d) => (
+                      <button
+                        key={d.card.id}
+                        onClick={() => { setSelectedCard(d.card); setModalType('detail'); }}
+                        className="w-full text-left flex items-center gap-3 bg-slate-950 border border-slate-800 hover:border-emerald-500/50 rounded-lg p-2 transition-colors"
+                      >
+                        <CardImage src={d.card.images?.small} alt={d.card.name} className="w-10 rounded" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-bold text-slate-100 truncate">{plainName(d.card)}</p>
+                          <p className="text-[10px] text-slate-500 truncate">{d.card.set?.name || 'Unbekannt'}</p>
+                          <p className="text-[11px] text-emerald-400 font-bold">{fmtSigned(d.diff)} zum Vortag (−{Math.abs(d.pct).toFixed(1).replace('.', ',')} %)</p>
+                          {d.target > 0 ? (
+                            <p className={`text-[11px] font-bold ${d.targetDiff <= 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                              {d.targetDiff <= 0
+                                ? `🎯 ${Math.abs(d.targetDiff).toFixed(2)} € unter dem Zielpreis (${eur(d.target)})`
+                                : `noch ${d.targetDiff.toFixed(2)} € über dem Zielpreis (${eur(d.target)})`}
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-slate-500">Kein Zielpreis gesetzt</p>
+                          )}
+                        </div>
+                        <div className="text-right whitespace-nowrap">
+                          <p className="text-sm font-black text-cyan-300">{eur(d.cur)}</p>
+                          <p className="text-[10px] text-slate-500 line-through">{eur(d.prev)}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
+
+            {todaysDrops.length === 0 && watchlist.length > 0 && !hasPriceHistory && (
+              <p className="text-[11px] text-slate-500 text-center">
+                Der Vergleich „Heute günstiger geworden“ startet mit dem nächsten Preis-Update, bei dem sich ein Preis ändert (Cardmarket aktualisiert einmal täglich).
+              </p>
+            )}
+
             {watchlist.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Deine Watchlist ist leer.</div>
             ) : (
@@ -2008,6 +2012,7 @@ export default function App() {
             )}
           </div>
         )}
+
 
         {activeTab === 'search' && (
           <div className="space-y-6 fade-in">
