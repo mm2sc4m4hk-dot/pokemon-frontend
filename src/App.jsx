@@ -502,6 +502,11 @@ function resizeImageFile(file, maxWidth = 500, quality = 0.7) {
 export default function App() {
   const [dropsOpen, setDropsOpen] = useState(true);
   const [batchAddOpen, setBatchAddOpen] = useState(false);
+const [batchSelectedSet, setBatchSelectedSet] = useState('');
+const [batchCardNumbers, setBatchCardNumbers] = useState('');
+const [batchSetFilter, setBatchSetFilter] = useState('');
+const [allSets, setAllSets] = useState([]);
+const [batchBusy, setBatchBusy] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
@@ -511,6 +516,63 @@ export default function App() {
   const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
+useEffect(() => {
+    if (!batchAddOpen || allSets.length > 0) return;
+    fetch(`${API_URL}/api/sets-list`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((l) => { if (Array.isArray(l)) setAllSets([...l].reverse()); })
+      .catch(() => {});
+  }, [batchAddOpen, allSets.length]);
+
+  const handleBatchAddByNumbers = async () => {
+    if (!batchSelectedSet || !batchCardNumbers.trim() || batchBusy) return;
+    setBatchBusy(true);
+    try {
+      const res = await fetch(`${API_URL}/api/sets/${encodeURIComponent(batchSelectedSet)}`);
+      if (!res.ok) throw new Error('Set konnte nicht geladen werden');
+      const setData = await res.json();
+      const norm = (v) => String(v).trim().toLowerCase().replace(/^0+(?=\d)/, '');
+      const byLocal = new Map((setData.cards || []).map((c) => [norm(c.localId), c]));
+      const counts = new Map();
+      const notFound = [];
+
+      batchCardNumbers.split(/[,;\s]+/).filter(Boolean).forEach((n) => {
+        const c = byLocal.get(norm(n));
+        if (c) counts.set(c.id, (counts.get(c.id) || 0) + 1);
+        else notFound.push(n);
+      });
+
+      if (counts.size === 0) {
+        setToastMsg('Keine dieser Nummern gefunden.');
+        return;
+      }
+
+      const ids = [...counts.keys()];
+      const full = [];
+      for (let i = 0; i < ids.length; i += 40) {
+        const r = await fetch(`${API_URL}/api/cards/bulk`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: ids.slice(i, i + 40) })
+        });
+        if (!r.ok) throw new Error(`Server antwortet mit Status ${r.status}`);
+        full.push(...((await r.json()).cards || []));
+      }
+
+      const entries = full.map((card) => ({ card, qty: counts.get(card.id) || 1 }));
+      await addBatchToCollection(
+        entries,
+        loadSetting('lastCondition', '') || 'Near Mint',
+        loadSetting('lastLang', '') || 'Deutsch 🇩🇪'
+      );
+      setBatchCardNumbers('');
+      if (notFound.length) setToastMsg(`Nicht gefunden: ${notFound.join(', ')}`);
+    } catch (e) {
+      alert('Hinzufügen fehlgeschlagen: ' + (e.message || 'Unbekannter Fehler'));
+    } finally {
+      setBatchBusy(false);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState('profile');
   const [searchQuery, setSearchQuery] = useState('');
@@ -1722,7 +1784,7 @@ export default function App() {
               📷 Einzelne Karte scannen &amp; hinzufügen
             </button>
 
-            {/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
+{/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
             <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 shadow-lg">
               <div className="flex justify-between items-center">
                 <div className="flex items-center gap-2">
@@ -1746,13 +1808,28 @@ export default function App() {
                   <div className="bg-slate-950 p-3 rounded-lg border border-slate-800/80 space-y-2.5">
                     <div>
                       <label className="text-[11px] font-bold text-slate-300 block mb-1">1. Set auswählen</label>
+                      {/* Suchfeld für das Set */}
+                      <input
+                        type="text"
+                        placeholder="Set suchen, z. B. 30th oder Celebrations"
+                        value={batchSetFilter}
+                        onChange={(e) => setBatchSetFilter(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg p-2 mb-1.5 outline-none focus:border-cyan-500"
+                      />
+                      {/* Dropdown basierend auf der API-Set-Liste */}
                       <select 
-                        value={batchSelectedSet || ''} 
-                        onChange={(e) => setBatchSelectedSet?.(e.target.value)}
+                        value={batchSelectedSet} 
+                        onChange={(e) => setBatchSelectedSet(e.target.value)}
                         className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg p-2 outline-none focus:border-cyan-500"
                       >
                         <option value="">-- Set wählen --</option>
-                        {availableSets.filter(s => s !== 'Alle').map(s => <option key={s} value={s}>{s}</option>)}
+                        {allSets
+                          .filter((s) => !batchSetFilter.trim() || s.name?.toLowerCase().includes(batchSetFilter.trim().toLowerCase()))
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name} ({s.total})
+                            </option>
+                          ))}
                       </select>
                     </div>
 
@@ -1762,16 +1839,16 @@ export default function App() {
                         <input
                           type="text"
                           placeholder="z. B. 001, 012, 045, 120"
-                          value={batchCardNumbers || ''}
-                          onChange={(e) => setBatchCardNumbers?.(e.target.value)}
+                          value={batchCardNumbers}
+                          onChange={(e) => setBatchCardNumbers(e.target.value)}
                           className="flex-1 bg-slate-900 border border-slate-800 focus:border-cyan-500 text-xs text-slate-200 rounded-lg px-3 py-2 outline-none"
                         />
                         <button
-                          onClick={() => handleBatchAddByNumbers?.()}
-                          disabled={!batchSelectedSet || !batchCardNumbers}
+                          onClick={handleBatchAddByNumbers}
+                          disabled={!batchSelectedSet || !batchCardNumbers.trim() || batchBusy}
                           className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 font-bold text-xs px-4 py-2 rounded-lg transition-colors whitespace-nowrap shadow-md"
                         >
-                          ➕ Hinzufügen
+                          {batchBusy ? '⏳ Lädt …' : '➕ Hinzufügen'}
                         </button>
                       </div>
                       <p className="text-[10px] text-slate-500 mt-1">Nummern kommagetrennt eingeben.</p>
@@ -1795,7 +1872,6 @@ export default function App() {
                 </div>
               )}
             </div>
-
             {/* PREIS-UPDATE BAR */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
               <button onClick={() => refreshPrices()} disabled={refreshing} className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-xs font-black px-3 py-2 rounded-lg transition-colors whitespace-nowrap">

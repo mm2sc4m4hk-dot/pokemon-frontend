@@ -574,19 +574,27 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
   const [q, setQ] = useState('');
   const [sortBy, setSortBy] = useState('name-asc');
   const [sq, setSq] = useState('');
+  const [sset, setSset] = useState('');
   const [res, setRes] = useState({ loading: false, error: '', cards: null });
+
+  // Normalisierung für Sets
+  const normSet = (s) => {
+    const query = String(s || '').toLowerCase().trim();
+    if (!query) return '';
+    if (query.includes('30 jahre') || query.includes('30th') || query.includes('30 j')) return '30th anniversary';
+    if (query.includes('25 jahre') || query.includes('25th') || query.includes('celebrations')) return 'celebrations';
+    return query;
+  };
 
   const mine = useMemo(() => {
     const t = q.trim().toLowerCase();
     const filtered = collection
       .filter((c) => c.id)
       .filter((c) => !t || `${c.name} ${c.set?.name || ''} ${c.number || ''}`.toLowerCase().includes(t));
-    // erst sortieren, dann doppelte Karten-IDs entfernen -> es bleibt jeweils die Kopie, die in der Sortierung vorne steht
     const seen = new Set();
     return sortCollection(filtered, sortBy).filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)));
   }, [collection, q, sortBy]);
 
-  // kleine Zusatzzeile unter der Karte passend zur gewählten Sortierung
   const sortInfo = (c) => {
     if (sortBy.startsWith('price')) return eur(c.userPrice);
     if (sortBy.startsWith('added')) return c.addedAt ? new Date(c.addedAt).toLocaleDateString('de-DE') : '–';
@@ -595,37 +603,68 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
     return '';
   };
 
+  // Suche mit Set-Parameter
   const search = async (e) => {
     e.preventDefault();
     if (!sq.trim()) return;
     setRes({ loading: true, error: '', cards: null });
     try {
-      const r = await fetch(`${api}/api/cards?name=${encodeURIComponent(sq.trim())}`);
-      const d = await r.json().catch(() => null);
-      if (!r.ok) throw new Error(d?.error || `Fehler ${r.status}`);
-      setRes({ loading: false, error: '', cards: Array.isArray(d) ? d : [] });
+      const params = new URLSearchParams({ name: sq.trim() });
+      const s = normSet(sset);
+      if (s) params.set('set', s);
+
+      const r = await fetch(`${api}/api/cards?${params.toString()}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setRes({ loading: false, error: '', cards: Array.isArray(data) ? data : [] });
     } catch (err) {
-      setRes({ loading: false, error: err.message || 'Suche fehlgeschlagen', cards: null });
+      setRes({ loading: false, error: err.message || 'Fehler bei der Suche', cards: [] });
     }
   };
 
   return (
     <Modal onClose={onClose} title="Karte für diesen Slot wählen">
       {current && (
-        <button onClick={onClear} className="w-full text-xs font-bold text-rose-300 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg py-2">Slot leeren ({current.name})</button>
+        <button onClick={onClear} className="w-full text-xs font-bold text-rose-300 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg py-2 mb-2">
+          Slot leeren ({current.name})
+        </button>
       )}
       <SlotPhoto ui={photoUi} />
-      <div className="flex gap-2">
-        {[['mine', '🎴 Meine Collection'], ['all', '🔍 Alle Karten']].map(([k, label]) => (
-          <button key={k} onClick={() => setTab(k)} className={`flex-1 py-2 rounded-lg text-xs font-bold border ${tab === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>{label}</button>
+      <div className="flex gap-2 my-2">
+        {[
+          ['mine', '🎴 Meine Collection'],
+          ['all', '🔍 Alle Karten'],
+        ].map(([k, label]) => (
+          <button
+            key={k}
+            onClick={() => setTab(k)}
+            className={`flex-1 py-2 rounded-lg text-xs font-bold border ${
+              tab === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800'
+            }`}
+          >
+            {label}
+          </button>
         ))}
       </div>
 
       {tab === 'mine' ? (
-        <>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filtern nach Name, Set oder Nummer …" className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="w-full bg-slate-950 text-xs border border-slate-700 rounded-lg p-2 text-slate-300">
-            {SORT_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        <div className="space-y-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Filtern nach Name, Set oder Nummer …"
+            className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
+          />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="w-full bg-slate-950 text-xs border border-slate-700 rounded-lg p-2 text-slate-300"
+          >
+            {SORT_OPTIONS.map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
           </select>
           {mine.length === 0 && <p className="text-xs text-slate-500">Keine Karten gefunden.</p>}
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
@@ -638,16 +677,34 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
             ))}
           </div>
           {mine.length > 120 && <p className="text-[10px] text-slate-500 text-center">Nur die ersten 120 – bitte weiter filtern.</p>}
-        </>
+        </div>
       ) : (
-        <>
+        <div className="space-y-3">
+          {/* ANGEPASSTES SUCHFORMULAR MIT SET-FELD */}
           <form onSubmit={search} className="flex gap-2">
-            <input value={sq} onChange={(e) => setSq(e.target.value)} placeholder='Kartenname, z. B. "Glumanda 044"' className="flex-1 bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
-            <button type="submit" className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs px-4 rounded-lg">Suche</button>
+            <input
+              type="text"
+              value={sq}
+              onChange={(e) => setSq(e.target.value)}
+              placeholder='Name, z. B. "Glumanda"'
+              className="flex-1 bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
+            />
+            <input
+              type="text"
+              value={sset}
+              onChange={(e) => setSset(e.target.value)}
+              placeholder='Set, z. B. "30 Jahre"'
+              className="w-28 bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
+            />
+            <button type="submit" className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs px-4 rounded-lg">
+              Suche
+            </button>
           </form>
+
           {res.loading && <Loading text="Suche läuft …" />}
           {res.error && <ErrorBox text={res.error} />}
           {res.cards && res.cards.length === 0 && <p className="text-xs text-slate-500">Keine Karten gefunden.</p>}
+          
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
             {(res.cards || []).map((c) => {
               const have = ownedIds.has(c.id);
@@ -663,7 +720,7 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
               );
             })}
           </div>
-        </>
+        </div>
       )}
     </Modal>
   );
