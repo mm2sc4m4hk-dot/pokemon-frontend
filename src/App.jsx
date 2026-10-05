@@ -68,8 +68,6 @@ const getAvailableVariants = (card) => {
   return available.length > 0 ? available : [VARIANTS[0]];
 };
 
-// Varianten für Hinzufügen/Bearbeiten: nur die laut Datenbank vorhandenen (eigene Karten: alle);
-// eine bereits gespeicherte Variante bleibt immer wählbar.
 const variantChoices = (card, current) => {
   const base = card?.isCustom ? VARIANTS : getAvailableVariants(card);
   if (!current || base.some((v) => v.key === current)) return base;
@@ -77,7 +75,6 @@ const variantChoices = (card, current) => {
   return cur ? [...base, cur] : base;
 };
 
-// Graded-Karten (PSA, BGS, CGC ...): der Richtwert ist nur eine grobe Schätzung über einen Faktor auf den Rohpreis.
 const GRADE_COMPANIES = ['PSA', 'BGS', 'CGC', 'SGC', 'ACE', 'Andere'];
 const GRADE_VALUES = ['10', '9.5', '9', '8.5', '8', '7', '6', '5', '4', '3', '2', '1'];
 const gradeFactor = (g) => {
@@ -122,8 +119,9 @@ const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const loadSetting = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; } };
 const saveSetting = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* egal */ } };
 
-// Der eine Preis einer Watchlist-Karte: Cardmarket-Trend (Normal), bei reinen Holo-Karten der Holo-Trend.
-// Anzeige und Zielpreis-Alarm nutzen genau diesen Wert.
+const prioOf = (c) => ([1, 2, 3].includes(Number(c?.priority)) ? Number(c.priority) : 2);
+const PRIO_LABEL = { 3: 'Muss ich haben', 2: 'Normal', 1: 'Irgendwann' };
+
 const watchPrice = (card) => {
   const p = card?.cardmarket?.prices || {};
   return p.trendPrice || p.averageSellPrice || p.trendPriceHolo || p.avg1Holo || 0;
@@ -133,11 +131,9 @@ const watchUsesHolo = (card) => {
   return !(p.trendPrice || p.averageSellPrice) && !!(p.trendPriceHolo || p.avg1Holo);
 };
 
-// Heutiges Datum (UTC, wie bei den bereits gespeicherten Snapshots) als "YYYY-MM-DD" (Dokument-ID der Wertverlauf-Snapshots)
 const todayKey = () => new Date().toISOString().slice(0, 10);
 const daysAgoKey = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
 
-// Preisobjekte vergleichen (Firestore sortiert die Schlüssel anders als das Backend)
 const samePrices = (a = {}, b = {}) => {
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of keys) if ((Number(a[k]) || 0) !== (Number(b[k]) || 0)) return false;
@@ -145,8 +141,6 @@ const samePrices = (a = {}, b = {}) => {
 };
 const hasPrice = (p = {}) => (p.trendPrice || p.averageSellPrice || p.trendPriceHolo || 0) > 0;
 
-// Watchlist: ist die Karte HEUTE günstiger geworden? Verglichen wird mit dem Preis vor der ersten
-// Änderung des heutigen Tages (prevPrice/priceDay werden beim Preis-Update gespeichert).
 const dropInfo = (card) => {
   const cur = watchPrice(card);
   const prev = Number(card?.prevPrice) || 0;
@@ -157,7 +151,6 @@ const dropInfo = (card) => {
   return { card, cur, prev, diff, pct: (diff / prev) * 100, target, targetDiff: target > 0 ? cur - target : null };
 };
 
-// Liniendiagramm für den Wertverlauf der Collection (reines SVG, keine Bibliothek).
 function ValueChart({ points }) {
   const [range, setRange] = useState('all');
   if (points.length < 2) {
@@ -324,7 +317,7 @@ const setIdOf = (item) => {
 function SetsView({ collection, watchIds }) {
   const [open, setOpen] = useState(null);
   const [cache, setCache] = useState({});
-  const [noSecret, setNoSecret] = useState({}); // Set-ID -> Secret Rares aus der Kostenrechnung lassen
+  const [noSecret, setNoSecret] = useState({});
 
   const groups = new Map();
   let withoutSet = 0;
@@ -366,7 +359,6 @@ function SetsView({ collection, watchIds }) {
         const pct = g.total ? Math.min(100, Math.round((owned / g.total) * 100)) : 0;
         const c = cache[g.id];
         const missing = c?.cards ? c.cards.filter(card => !g.ids.has(card.id)) : [];
-        // Secret Rares = Kartennummer größer als die offizielle Set-Größe (nur rein numerische Nummern)
         const isSecret = (card) => !!g.total && /^\d+$/.test(String(card.localId)) && parseInt(card.localId, 10) > g.total;
         const hideSecret = !!noSecret[g.id];
         const costCards = (hideSecret ? missing.filter(card => !isSecret(card)) : missing)
@@ -426,7 +418,7 @@ function SetsView({ collection, watchIds }) {
 
 function CardTitle({ card, size = 'sm', truncate = true }) {
   const isCm = card.source === 'cardmarket';
-  const m = isCm ? String(card.name).match(/^([^\[]*?)\s*\[(.*)\]\s*$/) : null;
+  const m = isCm ? String(card.name).match(/^([^\[']*?)\s*\[(.*)\]\s*$/) : null;
   const title = m ? m[1] : card.name;
   const attacks = m ? m[2] : null;
   const cls = size === 'lg' ? 'font-bold text-lg text-slate-100' : 'font-bold text-sm text-slate-200';
@@ -508,7 +500,6 @@ function resizeImageFile(file, maxWidth = 500, quality = 0.7) {
 }
 
 export default function App() {
-  // --- AUTH (Firebase) ---
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
@@ -533,7 +524,6 @@ export default function App() {
   const [selectedCard, setSelectedCard] = useState(null);
   const [modalType, setModalType] = useState(null);
 
-  // Schnell-Erfassung: Zuletzt gewählte Werte im localStorage speichern
   const [cardCondition, setCardCondition] = useState(() => loadSetting('lastCondition', '') || 'Near Mint');
   const [cardLanguage, setCardLanguage] = useState(() => loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
   const [cardVariant, setCardVariant] = useState('normal');
@@ -562,30 +552,28 @@ export default function App() {
   const [sortBy, setSortBy] = useState('name-asc');
   const [collectionSearch, setCollectionSearch] = useState('');
 
-  // Toast-Feedback
+  const [wishSort, setWishSort] = useState(() => loadSetting('wishSort', 'prio'));
+  const changeWishSort = (k) => { setWishSort(k); saveSetting('wishSort', k); };
+
   const [toastMsg, setToastMsg] = useState('');
 
-  // Karten-Scanner: null | 'search' | 'collection'
   const [scanOpen, setScanOpen] = useState(null);
   const [scanSeries, setScanSeries] = useState(() => loadSetting('scanSeries', '0') === '1');
   const [batchOpen, setBatchOpen] = useState(false);
   const [saleItem, setSaleItem] = useState(null);
-  const scanFlowRef = useRef(false); // true, wenn das Hinzufügen-Fenster aus dem Scanner kam
+  const scanFlowRef = useRef(false);
 
   const unsubscribers = useRef([]);
 
-  // Freigabe-Link: /?share=TOKEN zeigt die Sammlung nur lesend (ohne Anmeldung)
   const shareToken = useMemo(() => {
     const t = new URLSearchParams(window.location.search).get('share') || '';
     return /^[A-Za-z0-9]{16,64}$/.test(t) ? t : '';
   }, []);
-  // „Hast du schon“: Karten-ID -> Anzahl + Varianten in der Collection
   const ownedMap = useMemo(() => buildOwnedMap(collection), [collection]);
 
-  // Preis-Aktualisierung & Wertverlauf
   const [collectionReady, setCollectionReady] = useState(false);
   const [watchlistReady, setWatchlistReady] = useState(false);
-  const [snapshots, setSnapshots] = useState([]); // [{ date, value, ... }] aufsteigend nach Datum
+  const [snapshots, setSnapshots] = useState([]);
   const [snapshotsReady, setSnapshotsReady] = useState(false);
   const [snapshotsDenied, setSnapshotsDenied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -600,9 +588,6 @@ export default function App() {
   useEffect(() => { if (modalType === 'collection') { setCardQuantity('1'); setPurchasePrice(''); setGradeCompany(''); setGradeValue(''); setAlertHigh(''); } }, [modalType]);
   useEffect(() => { if (customCardOpen) { setCardQuantity('1'); setPurchasePrice(''); } }, [customCardOpen]);
 
-  // Ping: hält das Render-Backend wach (Gratisplan schläft nach ~15 Min. ohne Anfrage ein).
-  // Läuft beim Start (weckt den Server schon während man sich einloggt) und danach alle 9 Minuten,
-  // solange die App im Vordergrund geöffnet ist.
   useEffect(() => {
     const ping = () => {
       if (document.visibilityState === 'hidden') return;
@@ -618,7 +603,6 @@ export default function App() {
     setDetailVariant(selectedCard?.userVariant || getAvailableVariants(selectedCard)[0].key);
   }, [selectedCard]);
 
-  // Toast Auto-Clear
   useEffect(() => {
     if (toastMsg) {
       const timer = setTimeout(() => setToastMsg(''), 3000);
@@ -626,7 +610,6 @@ export default function App() {
     }
   }, [toastMsg]);
 
-  // Klick auf eine Push-Nachricht: Kaltstart über ?tab=watchlist, offene App über Nachricht vom Service Worker
   useEffect(() => {
     const allowed = ['watchlist', 'profile', 'collection'];
     const fromUrl = new URLSearchParams(window.location.search).get('tab');
@@ -641,7 +624,6 @@ export default function App() {
     return () => navigator.serviceWorker.removeEventListener('message', onMsg);
   }, []);
 
-  // Firebase Auth & Firestore Listener
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       unsubscribers.current.forEach((u) => u());
@@ -676,7 +658,6 @@ export default function App() {
           setWatchlistReady(true);
         });
 
-        // Täglicher Wert-Snapshot der Collection (Dokument-ID = Datum)
         const snapRef = fsCollection(db, 'users', user.uid, 'snapshots');
         const unsubSnap = onSnapshot(snapRef, (snap) => {
           setSnapshots(
@@ -870,7 +851,6 @@ export default function App() {
     searchSelections[cardId] || {
       condition: cardCondition,
       language: cardLanguage,
-      // Erste wirklich vorhandene Variante (Holo-only-Karten hätten sonst Preis 0 €)
       variant: getAvailableVariants(searchResults.find((c) => c.id === cardId))[0].key
     };
 
@@ -910,12 +890,10 @@ export default function App() {
     };
     delete newItem.docId;
     delete newItem.instanceId;
-    // Watchlist-Felder gehören nicht in die Collection
     ['targetPrice', 'prevPrice', 'priceDay', 'alertedTarget', 'alertedAt', 'alertedPrice', 'priceUpdatedAt', 'targetHigh', 'alertedHigh'].forEach((k) => { delete newItem[k]; });
     try {
       await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
       
-      // Zustand & Sprache für die Schnell-Erfassung merken
       saveSetting('lastCondition', cardCondition);
       saveSetting('lastLang', cardLanguage);
 
@@ -936,7 +914,6 @@ export default function App() {
     }
   };
 
-  // Batch-Scanner: mehrere erkannte Karten auf einmal in die Collection
   const addBatchToCollection = async (entries, cond, lang) => {
     const uid = auth.currentUser?.uid;
     if (!uid) throw new Error('Nicht angemeldet.');
@@ -968,17 +945,12 @@ export default function App() {
     setToastMsg(`${entries.length} Karten zur Collection hinzugefügt! ✓`);
   };
 
-  // Ist der gespeicherte Preis automatisch berechnet (und nicht vom Nutzer selbst
-  // eingetragen)? Nur dann darf die Aktualisierung ihn überschreiben.
   const isAutoPrice = (item) => {
     if (item.isCustom) return false;
     const calc = parseFloat(calculatePrice(item, item.userCondition, item.userLanguage, item.userVariant || 'normal', item.userGrade));
     return Math.abs(calc - (parseFloat(item.userPrice) || 0)) < 0.011;
   };
 
-  // Holt aktuelle Cardmarket-Preise für alle Karten der Collection und Watchlist
-  // und schreibt sie per Batch nach Firestore. Selbst eingetragene Preise bleiben
-  // unverändert (nur die Cardmarket-Daten dahinter werden aufgefrischt).
   const refreshPrices = async ({ silent = false } = {}) => {
     if (!auth.currentUser || refreshing) return;
     const uid = auth.currentUser.uid;
@@ -993,8 +965,6 @@ export default function App() {
     setRefreshing(true);
     setRefreshMsg('Aktualisiere Preise … (der Server braucht nach Inaktivität evtl. bis zu einer Minute)');
     try {
-      // Erst die vom Server-Job vorbereiteten Preise aus Firestore (sofort, auch wenn der Render-Server
-      // schläft); nur Karten ohne frischen Eintrag gehen ans Backend.
       const fresh = await fetchPrices(ids, API_URL, {
         onProgress: (done, total) => setRefreshMsg(`Aktualisiere … ${done} / ${total}`)
       });
@@ -1013,7 +983,6 @@ export default function App() {
       for (const item of collection) {
         const f = fresh[item.id];
         if (!f?.prices || !item.docId) continue;
-        // Keine guten alten Preise mit einer leeren Antwort überschreiben
         if (!hasPrice(f.prices) && hasPrice(item.cardmarket?.prices)) continue;
         const auto = isAutoPrice(item);
         const cardmarket = merged(item, f);
@@ -1033,7 +1002,6 @@ export default function App() {
         if (!hasPrice(f.prices) && hasPrice(card.cardmarket?.prices)) continue;
         if (samePrices(f.prices, card.cardmarket?.prices)) continue;
         const upd = { cardmarket: merged(card, f), priceUpdatedAt: Date.now() };
-        // Preis vor der ersten Änderung des heutigen Tages merken -> „Heute günstiger geworden“
         const today = todayKey();
         if (card.priceDay !== today) {
           const before = watchPrice(card);
@@ -1202,7 +1170,7 @@ export default function App() {
     try {
       const cleanPrice = parseMoney(price);
       const old = parseFloat(watchlist.find((c) => c.id === cardId)?.targetPrice) || 0;
-      if ((cleanPrice ? parseFloat(cleanPrice) : 0) === old) return; // nichts geändert
+      if ((cleanPrice ? parseFloat(cleanPrice) : 0) === old) return;
       await updateDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', cardId), {
         targetPrice: cleanPrice ? parseFloat(cleanPrice) : null
       });
@@ -1212,7 +1180,6 @@ export default function App() {
     }
   };
 
-  // Alarm bei Preisanstieg (Watchlist): Gegenstück zum Zielpreis nach unten
   const updateTargetHigh = async (cardId, price) => {
     if (!auth.currentUser) return;
     try {
@@ -1226,14 +1193,18 @@ export default function App() {
     }
   };
 
+  const setPriority = async (cardId, n) => {
+    if (!auth.currentUser) return;
+    try { await updateDoc(doc(db, 'users', auth.currentUser.uid, 'watchlist', cardId), { priority: n }); }
+    catch (err) { console.error('Priorität:', err); }
+  };
+
   const watchlistIds = new Set(watchlist.map((c) => c.id));
   const toggleWatchlist = (card) => {
     if (watchlistIds.has(card.id)) removeFromWatchlist(card.id);
     else addToWatchlistCard(card);
   };
 
-  // Karte aus Artist-/Pokédex-/Binder-Ansicht auf die Watchlist: erst die vollständigen
-  // Daten (inkl. Cardmarket-Preis) vom Backend holen, dann wie gewohnt speichern.
   const addBriefToWatchlist = async (brief) => {
     if (!brief?.id || watchlistIds.has(brief.id)) return;
     if (brief.cardmarket) { await addToWatchlistCard(brief); return; }
@@ -1246,11 +1217,9 @@ export default function App() {
     }
   };
 
-  // Kurzform einer Karte (aus Artist-/Binder-Ansicht) -> vollständige Karte inkl. Cardmarket-Preisen
   const loadFullCard = async (brief) => {
     if (brief.cardmarket) return brief;
     if (String(brief.id).startsWith('cm-')) {
-      // Treffer, die nur aus der Cardmarket-Datei stammen: Preise über den Preis-Endpunkt holen
       const res = await fetch(`${API_URL}/api/prices`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1271,14 +1240,12 @@ export default function App() {
     return res.json();
   };
 
-  // Öffnet das normale Hinzufügen-Fenster (Zustand, Sprache, Variante, Preis, eigenes Foto ...).
-  // Steht die Karte auf der Watchlist, wird sie danach (abwählbar) von dort entfernt.
   const beginAddToCollection = (card) => {
     setSelectedCard(card);
     setCardCondition(loadSetting('lastCondition', '') || 'Near Mint');
     setCardLanguage(loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
     setCardVariant(getAvailableVariants(card)[0].key);
-    setCustomImage(card.customImage || ''); // Foto aus dem Binder-Slot vorbelegen
+    setCustomImage(card.customImage || '');
     if (watchlistIds.has(card.id)) {
       setMoveFromWatchlistId(card.id);
       setRemoveFromWatchlistAfter(true);
@@ -1288,7 +1255,6 @@ export default function App() {
     setModalType('collection');
   };
 
-  // Karte aus Artist-/Binder-Ansicht direkt in die Collection
   const addBriefToCollection = async (brief) => {
     if (!brief?.id) return;
     try {
@@ -1299,8 +1265,6 @@ export default function App() {
     }
   };
 
-  // Karte aus dem Binder (z. B. ausgegrauter „fehlt“-Slot) anzeigen wie beim Anklicken in der Collection:
-  // vollständige Daten + Cardmarket-Preise holen und das Detail-Fenster mit Preisverlauf öffnen.
   const openCardDetail = async (brief) => {
     if (!brief?.id) return;
     try {
@@ -1313,9 +1277,6 @@ export default function App() {
     }
   };
 
-  // --- Karten-Scanner ---
-  // Suchen-Tab: erkannten Text in die Suche übernehmen und sofort suchen
-  // (findet die Nummer nichts, wird nur nach dem Namen gesucht).
   const handleScanForSearch = async ({ query, name, number }) => {
     setScanOpen(null);
     setSearchQuery(query);
@@ -1327,7 +1288,6 @@ export default function App() {
     }
   };
 
-  // Collection-Tab: Suche für die Trefferliste im Scanner
   const scanSearch = async (q) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
@@ -1342,14 +1302,12 @@ export default function App() {
     }
   };
 
-  // Treffer im Scanner angetippt -> normales Hinzufügen-Fenster (Zustand, Sprache, Variante ...)
   const handleScanPick = (card) => {
     setScanOpen(null);
     beginAddToCollection(card);
     scanFlowRef.current = true;
   };
 
-  // Ältere Collection-Karten kennen ihre Pokédex-Nummer und ihren Artist noch nicht -> einmal nachladen
   const needsMeta = collection.filter((c) => c.id && c.dexId === undefined
     && !String(c.id).startsWith('custom-') && !String(c.id).startsWith('cm-'));
 
@@ -1435,7 +1393,6 @@ export default function App() {
 
   const availableSets = ['Alle', ...new Set(collection.map(item => item.set?.name).filter(Boolean))];
 
-  // Watchlist: gleiche Regel wie in der Karten-Anzeige (Trend <= Zielpreis)
   const isDealCard = (card) => {
     const target = parseFloat(card.targetPrice) || 0;
     const currentTrend = watchPrice(card);
@@ -1448,7 +1405,17 @@ export default function App() {
   );
   const hasPriceHistory = watchlist.some((c) => c.priceDay);
 
-  // Diagramme im Profil: Top 10 teuerste Karten und Wert pro Set
+  const sortedWatchlist = useMemo(() => {
+    const cmp = {
+      prio: (a, b) => prioOf(b) - prioOf(a) || watchPrice(a) - watchPrice(b),
+      cheap: (a, b) => watchPrice(a) - watchPrice(b),
+      expensive: (a, b) => watchPrice(b) - watchPrice(a),
+      name: (a, b) => plainName(a).localeCompare(plainName(b)),
+      added: (a, b) => (b.addedAt || 0) - (a.addedAt || 0)
+    }[wishSort];
+    return [...watchlist].sort(cmp);
+  }, [watchlist, wishSort]);
+
   const topCards = useMemo(() => [...collection]
     .sort((a, b) => (parseFloat(b.userPrice) || 0) - (parseFloat(a.userPrice) || 0))
     .slice(0, 10)
@@ -1477,7 +1444,6 @@ export default function App() {
     return top;
   }, [collection]);
 
-  // Einmal pro Sitzung automatisch Preise auffrischen (höchstens alle 12 Stunden)
   useEffect(() => {
     if (!isAuthenticated || !collectionReady || !watchlistReady || autoRefreshed.current) return;
     autoRefreshed.current = true;
@@ -1488,7 +1454,6 @@ export default function App() {
     setTimeout(() => { refreshRef.current && refreshRef.current({ silent: true }); }, 1500);
   }, [isAuthenticated, collectionReady, watchlistReady]);
 
-  // Täglichen Wert-Snapshot speichern bzw. den heutigen aktualisieren, wenn sich der Wert ändert
   useEffect(() => {
     if (!isAuthenticated || !collectionReady || !snapshotsReady || snapshotsDenied || collection.length === 0) return;
     const date = todayKey();
@@ -1507,7 +1472,6 @@ export default function App() {
     return () => clearTimeout(t);
   }, [isAuthenticated, collectionReady, snapshotsReady, snapshotsDenied, stats.median, totalPieces, collection.length, snapshots]);
 
-  // Beim Öffnen von Binder / Pokédex / Artist fehlende Pokédex-/Artist-Daten einmal automatisch nachladen
   useEffect(() => {
     if (!isAuthenticated || !collectionReady || activeTab !== 'collection') return;
     if (!['binder', 'dex', 'artist'].includes(collectionView)) return;
@@ -1704,7 +1668,7 @@ export default function App() {
               onEdit={openEditCard}
             />
 
-            <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} />
+            <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} api={API_URL} />
             <BackupPanel
               collection={collection}
               watchlist={watchlist}
@@ -1877,85 +1841,98 @@ export default function App() {
             {watchlist.length === 0 ? (
               <div className="text-center py-20 text-slate-500">Deine Watchlist ist leer.</div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[...watchlist].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).map((card) => {
-                  const target = parseFloat(card.targetPrice) || 0;
-                  const currentTrend = watchPrice(card);
-                  const isDeal = target > 0 && currentTrend > 0 && currentTrend <= target;
-                  const high = parseFloat(card.targetHigh) || 0;
-                  const isHigh = high > 0 && currentTrend >= high;
+              <>
+                <div className="flex gap-1.5 flex-wrap">
+                  {[['prio', '★ Wichtigkeit'], ['cheap', 'Günstigste'], ['expensive', 'Teuerste'], ['name', 'Name'], ['added', 'Neueste']].map(([k, l]) => (
+                    <button key={k} onClick={() => changeWishSort(k)} className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${wishSort === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800'}`}>{l}</button>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {sortedWatchlist.map((card) => {
+                    const target = parseFloat(card.targetPrice) || 0;
+                    const currentTrend = watchPrice(card);
+                    const isDeal = target > 0 && currentTrend > 0 && currentTrend <= target;
+                    const high = parseFloat(card.targetHigh) || 0;
+                    const isHigh = high > 0 && currentTrend >= high;
 
-                  return (
-                    <div key={card.id} className={`bg-slate-900 border ${isDeal ? 'border-emerald-500 shadow-lg shadow-emerald-500/10' : 'border-slate-800 hover:border-cyan-500/50'} rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors`}>
-                      <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
-                      <div className="flex-1">
-                        <CardTitle card={card} truncate={false} />
-                        <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
-                        <OwnedBadge info={ownedMap.get(card.id)} className="mt-1" />
-                        
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-[10px] text-slate-400">Zielpreis:</span>
-                          <input
-                            type="number"
-                            step="0.01"
-                            placeholder="0.00 €"
-                            defaultValue={card.targetPrice || ''}
-                            onBlur={(e) => updateTargetPrice(card.id, e.target.value)}
-                            className="w-20 bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500"
-                          />
-                          <span className="text-xs text-slate-400">€</span>
-                          {isDeal && (
-                            <span className="bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-md animate-pulse">
-                              🎯 KAUFEN!
-                            </span>
-                          )}
+                    return (
+                      <div key={card.id} className={`bg-slate-900 border ${isDeal ? 'border-emerald-500 shadow-lg shadow-emerald-500/10' : 'border-slate-800 hover:border-cyan-500/50'} rounded-xl p-3 flex gap-4 items-center shadow-lg transition-colors`}>
+                        <CardImage onClick={() => { setSelectedCard(card); setModalType('detail'); }} src={card.images?.small} alt={card.name} className="w-16 rounded-md cursor-pointer hover:opacity-80" />
+                        <div className="flex-1">
+                          <CardTitle card={card} truncate={false} />
+                          <p className="text-xs text-slate-400">{card.set?.name || 'Unbekannt'}</p>
+                          <OwnedBadge info={ownedMap.get(card.id)} className="mt-1" />
+                          <div className="flex items-center gap-1 mt-1" title={PRIO_LABEL[prioOf(card)]}>
+                            {[1, 2, 3].map((n) => (
+                              <button key={n} onClick={() => setPriority(card.id, n)} className={`text-base leading-none ${n <= prioOf(card) ? 'text-amber-300' : 'text-slate-700 hover:text-slate-500'}`}>★</button>
+                            ))}
+                            <span className="text-[10px] text-slate-500 ml-1">{PRIO_LABEL[prioOf(card)]}</span>
+                          </div>
+                          
+                          <div className="flex items-center gap-2 mt-2">
+                            <span className="text-[10px] text-slate-400">Zielpreis:</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00 €"
+                              defaultValue={card.targetPrice || ''}
+                              onBlur={(e) => updateTargetPrice(card.id, e.target.value)}
+                              className="w-20 bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500"
+                            />
+                            <span className="text-xs text-slate-400">€</span>
+                            {isDeal && (
+                              <span className="bg-emerald-500/20 border border-emerald-500/50 text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-md animate-pulse">
+                                🎯 KAUFEN!
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] text-slate-400">Alarm ab:</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              placeholder="0.00 €"
+                              defaultValue={card.targetHigh || ''}
+                              onBlur={(e) => updateTargetHigh(card.id, e.target.value)}
+                              className="w-20 bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500"
+                            />
+                            <span className="text-xs text-slate-400">€</span>
+                            {isHigh && (
+                              <span className="bg-sky-500/20 border border-sky-500/50 text-sky-300 text-[10px] font-black px-2 py-0.5 rounded-md animate-pulse">📈 GESTIEGEN</span>
+                            )}
+                          </div>
+                          <OutlierBadge prices={card.cardmarket?.prices} holo={watchUsesHolo(card)} detail className="block mt-1" />
+
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="text-sm font-bold text-cyan-400">{eur(currentTrend)}</p>
+                            <span className="text-[10px] text-slate-500">Cardmarket-Trend{watchUsesHolo(card) ? ' (Holo)' : ''}</span>
+                            {getTrendIcon(card, watchUsesHolo(card) ? 'holo' : 'normal')}
+                          </div>
                         </div>
-
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[10px] text-slate-400">Alarm ab:</span>
-                          <input
-                            type="number"
-                            step="0.01"
-                            placeholder="0.00 €"
-                            defaultValue={card.targetHigh || ''}
-                            onBlur={(e) => updateTargetHigh(card.id, e.target.value)}
-                            className="w-20 bg-slate-950 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1 outline-none focus:border-cyan-500"
-                          />
-                          <span className="text-xs text-slate-400">€</span>
-                          {isHigh && (
-                            <span className="bg-sky-500/20 border border-sky-500/50 text-sky-300 text-[10px] font-black px-2 py-0.5 rounded-md animate-pulse">📈 GESTIEGEN</span>
-                          )}
-                        </div>
-                        <OutlierBadge prices={card.cardmarket?.prices} holo={watchUsesHolo(card)} detail className="block mt-1" />
-
-                        <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-cyan-400">{eur(currentTrend)}</p>
-                          <span className="text-[10px] text-slate-500">Cardmarket-Trend{watchUsesHolo(card) ? ' (Holo)' : ''}</span>
-                          {getTrendIcon(card, watchUsesHolo(card) ? 'holo' : 'normal')}
+                        <div className="flex flex-col items-stretch gap-2">
+                          <button
+                            onClick={() => {
+                              setSelectedCard(card);
+                              setCardCondition(loadSetting('lastCondition', '') || 'Near Mint');
+                              setCardLanguage(loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
+                              setCardVariant(getAvailableVariants(card)[0].key);
+                              setMoveFromWatchlistId(card.id);
+                              setRemoveFromWatchlistAfter(true);
+                              setModalType('collection');
+                            }}
+                            title="In die Collection übernehmen"
+                            className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold px-3 py-2 rounded-lg border border-cyan-500/30 transition-colors"
+                          >
+                            ➕ Coll
+                          </button>
+                          <button onClick={() => removeFromWatchlist(card.id)} className="text-slate-500 hover:text-rose-400 text-sm font-bold">✕</button>
                         </div>
                       </div>
-                      <div className="flex flex-col items-stretch gap-2">
-                        <button
-                          onClick={() => {
-                            setSelectedCard(card);
-                            setCardCondition(loadSetting('lastCondition', '') || 'Near Mint');
-                            setCardLanguage(loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
-                            setCardVariant(getAvailableVariants(card)[0].key);
-                            setMoveFromWatchlistId(card.id);
-                            setRemoveFromWatchlistAfter(true);
-                            setModalType('collection');
-                          }}
-                          title="In die Collection übernehmen"
-                          className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500 hover:text-slate-900 text-xs font-bold px-3 py-2 rounded-lg border border-cyan-500/30 transition-colors"
-                        >
-                          ➕ Coll
-                        </button>
-                        <button onClick={() => removeFromWatchlist(card.id)} className="text-slate-500 hover:text-rose-400 text-sm font-bold">✕</button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1971,7 +1948,6 @@ export default function App() {
               </button>
             </form>
 
-            {/* VISUELLER LADEBALKEN WÄHREND DER SUCHE */}
             {loading && (
               <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-5 shadow-xl space-y-3">
                 <div className="flex items-center justify-between text-xs text-cyan-400 font-bold">
@@ -1982,7 +1958,6 @@ export default function App() {
                   <span className="animate-pulse text-[10px] text-slate-400">Bitte warten</span>
                 </div>
                 
-                {/* Ladebalken Container */}
                 <div className="w-full bg-slate-950 rounded-full h-2.5 overflow-hidden border border-slate-800 p-0.5">
                   <div className="bg-gradient-to-r from-cyan-500 via-teal-400 to-cyan-500 h-full rounded-full animate-pulse w-full"></div>
                 </div>

@@ -58,8 +58,6 @@ export function OwnedBadge({ info, className = '' }) {
 
 // ---------------------------------------------------------------------
 // Freigabe per Link (nur Lesen)
-// Die Sammlung wird als schlanke Kopie unter shares/{token} (+ parts/{n}) abgelegt. Wer den Link kennt, kann sie lesen;
-// den Token errät niemand (24 zufällige Zeichen). Einkaufspreise und eigene Fotos sind nie enthalten.
 // ---------------------------------------------------------------------
 const PART_SIZE = 300;
 const MAX_PARTS = 100;
@@ -92,21 +90,24 @@ function buildShareItems(collection, showPrices) {
   return items;
 }
 
-// Wunschliste für Freunde: nur Name, Set, Bild und (optional) der Cardmarket-Trend – KEINE Zielpreise
-function buildWishItems(watchlist, showPrices) {
+const prioOf = (c) => ([1, 2, 3].includes(Number(c?.priority)) ? Number(c.priority) : 2);
+const cmUrl = (c, n) => {
+  const q = n ? [n.name, ...(n.abilities || []), ...(n.attacks || [])].join(' ') : plain(c.name);
+  return `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(q)}`;
+};
+
+function buildWishItems(watchlist, showPrices, en = {}) {
   const items = (watchlist || []).filter((c) => c && c.id).map((c) => {
     const img = c.images?.small || '';
     const pr = c.cardmarket?.prices || {};
-    const o = { i: c.id, n: plain(c.name), s: c.set?.name || '', no: c.number || '', im: /^https?:/.test(img) ? img : '' };
+    const o = { i: c.id, n: plain(c.name), s: c.set?.name || '', no: c.number || '', im: /^https?:/.test(img) ? img : '', pr: prioOf(c), u: cmUrl(c, en[c.id]) };
     if (showPrices) o.p = pr.trendPrice || pr.averageSellPrice || pr.trendPriceHolo || pr.avg1Holo || 0;
     return o;
   });
-  items.sort((a, b) => a.n.localeCompare(b.n) || a.s.localeCompare(b.s) || a.i.localeCompare(b.i));
+  items.sort((a, b) => b.pr - a.pr || a.n.localeCompare(b.n) || a.s.localeCompare(b.s) || a.i.localeCompare(b.i));
   return items;
 }
 
-// Wunsch-Teile liegen in derselben Unter-Sammlung wie die Sammlung ("parts"), aber mit den IDs w0, w1, ...
-// -> keine neuen Firestore-Regeln nötig.
 async function pushShare(uid, share, items, wish = []) {
   const capped = items.slice(0, PART_SIZE * MAX_PARTS);
   const parts = [];
@@ -142,9 +143,9 @@ async function pushShare(uid, share, items, wish = []) {
   return meta;
 }
 
-export function SharePanel({ collection, watchlist = [], ready }) {
+export function SharePanel({ collection, watchlist = [], ready, api }) {
   const uid = auth.currentUser?.uid;
-  const [share, setShare] = useState(undefined); // undefined = lädt, null = keine Freigabe
+  const [share, setShare] = useState(undefined);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
   const lastSig = useRef(null);
@@ -171,11 +172,24 @@ export function SharePanel({ collection, watchlist = [], ready }) {
   const showPrices = share ? share.showPrices !== false : true;
   const showCollection = share ? share.showCollection !== false : true;
   const showWishlist = share ? !!share.showWishlist : false;
+
+  const [en, setEn] = useState({});
+  useEffect(() => {
+    if (!showWishlist || !api) return undefined;
+    const ids = watchlist.map((c) => c.id).filter((id) => isReal(id) && !String(id).startsWith('cm-') && !en[id]).slice(0, 100);
+    if (!ids.length) return undefined;
+    let alive = true;
+    fetch(`${api}/api/wantlist-names`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && d.names) setEn((p) => ({ ...p, ...d.names })); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [watchlist, showWishlist, api, Object.keys(en).length]);
+
   const items = useMemo(() => (showCollection ? buildShareItems(collection, showPrices) : []), [collection, showPrices, showCollection]);
-  const wishItems = useMemo(() => (showWishlist ? buildWishItems(watchlist, showPrices) : []), [watchlist, showPrices, showWishlist]);
+  const wishItems = useMemo(() => (showWishlist ? buildWishItems(watchlist, showPrices, en) : []), [watchlist, showPrices, showWishlist, en]);
   const sig = useMemo(() => JSON.stringify([items, wishItems]), [items, wishItems]);
 
-  // Änderungen automatisch übernehmen (nach 5 s Ruhe), solange die App offen ist
   useEffect(() => {
     if (!share || !share.token || !ready) return undefined;
     if (lastSig.current === null) { lastSig.current = sig; return undefined; }
@@ -190,15 +204,13 @@ export function SharePanel({ collection, watchlist = [], ready }) {
       }
     }, 5000);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, share && share.token, ready]);
 
-  // Baut die zu teilenden Listen passend zu den Schaltern des Links
   const build = (s) => {
     const sp = s.showPrices !== false;
     return {
       its: s.showCollection !== false ? buildShareItems(collection, sp) : [],
-      wish: s.showWishlist ? buildWishItems(watchlist, sp) : []
+      wish: s.showWishlist ? buildWishItems(watchlist, sp, en) : []
     };
   };
 
@@ -241,7 +253,6 @@ export function SharePanel({ collection, watchlist = [], ready }) {
     if (!window.confirm('Link löschen? Danach kann niemand die Sammlung mehr über diesen Link sehen.')) return;
     setBusy(true); setMsg('');
     try {
-      // Erst die Teile (Regel prüft den Besitzer am noch vorhandenen Hauptdokument), dann das Hauptdokument
       const batch = writeBatch(db);
       for (let i = 0; i < (share.parts || 0); i += 1) batch.delete(doc(db, 'shares', share.token, 'parts', String(i)));
       for (let i = 0; i < (share.wishParts || 0); i += 1) batch.delete(doc(db, 'shares', share.token, 'parts', `w${i}`));
@@ -284,6 +295,9 @@ export function SharePanel({ collection, watchlist = [], ready }) {
               <button onClick={nativeShare} className="flex-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 font-bold text-xs py-2 rounded-lg">Teilen …</button>
             )}
           </div>
+          {showWishlist && (
+            <button onClick={async () => { try { await navigator.clipboard.writeText(link + '&view=wish'); setMsg('Wunschlisten-Link kopiert. ✓'); } catch (e) { window.prompt('Zum Kopieren markieren:', link + '&view=wish'); } }} className="w-full bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 font-bold text-xs py-2 rounded-lg">🎁 Link nur zur Wunschliste kopieren</button>
+          )}
           <label className="flex items-center gap-2 text-xs text-slate-300">
             <input type="checkbox" checked={showPrices} disabled={busy} onChange={togglePrices} className="accent-cyan-500" />
             Preise und Gesamtwert im Link anzeigen
@@ -320,6 +334,8 @@ export function SharedView({ token, Img }) {
   const [limitN, setLimitN] = useState(120);
   const [tab, setTab] = useState('coll');
 
+  const onlyWish = useMemo(() => new URLSearchParams(window.location.search).get('view') === 'wish', []);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -343,7 +359,7 @@ export function SharedView({ token, Img }) {
   const wish = state.wish || [];
   const hasColl = items.length > 0;
   const hasWish = wish.length > 0;
-  const view = tab === 'wish' && hasWish ? 'wish' : (hasColl ? 'coll' : 'wish');
+  const view = (onlyWish || tab === 'wish') && hasWish ? 'wish' : (hasColl ? 'coll' : 'wish');
   const hasPrices = !!meta?.showPrices;
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -368,9 +384,9 @@ export function SharedView({ token, Img }) {
         {meta && (
           <>
             <div className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-5 shadow-xl">
-              <h1 className="text-xl font-black text-white">Sammlung von {meta.owner || 'Trainer'}</h1>
+              <h1 className="text-xl font-black text-white">{onlyWish ? 'Wunschliste' : 'Sammlung'} von {meta.owner || 'Trainer'}</h1>
               <p className="text-xs text-slate-400 mt-1">Nur Ansicht · Stand {meta.updatedAt ? new Date(meta.updatedAt).toLocaleString('de-DE') : '–'}</p>
-              <div className={'mt-4 grid grid-cols-2 gap-3 text-center' + (hasColl ? '' : ' hidden')}>
+              <div className={'mt-4 grid grid-cols-2 gap-3 text-center' + (hasColl && !onlyWish ? '' : ' hidden')}>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3">
                   <p className="text-[10px] text-slate-400 uppercase tracking-wider">Karten</p>
                   <p className="text-lg font-black text-cyan-300">{meta.pieces ?? items.length}</p>
@@ -384,7 +400,7 @@ export function SharedView({ token, Img }) {
               </div>
             </div>
 
-            {hasColl && hasWish && (
+            {hasColl && hasWish && !onlyWish && (
               <div className="flex gap-2">
                 {[['coll', '🎴 Sammlung'], ['wish', '🎁 Wunschliste']].map(([k, l]) => (
                   <button key={k} onClick={() => setTab(k)} className={`flex-1 py-2 rounded-lg text-xs font-bold border ${view === k ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>{l}</button>
@@ -403,7 +419,8 @@ export function SharedView({ token, Img }) {
                       <p className="text-xs font-bold text-slate-200 truncate">{it.n}{it.no ? <span className="text-slate-500 font-normal"> #{it.no}</span> : null}</p>
                       <p className="text-[10px] text-slate-400 truncate">{it.s || 'Unbekanntes Set'}</p>
                       {hasPrices && it.p > 0 && <p className="text-xs text-cyan-400 font-bold mt-1">ca. {eur(it.p)}</p>}
-                      <a href={`https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent([it.n, it.no].filter(Boolean).join(' '))}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-slate-500 hover:text-cyan-400 underline">Cardmarket ↗</a>
+                      {it.pr && <p className="text-xs text-amber-300">{'★'.repeat(it.pr)}<span className="text-slate-700">{'★'.repeat(3 - it.pr)}</span></p>}
+                      <a href={it.u || `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(it.n)}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-cyan-400 underline">Auf Cardmarket suchen ↗</a>
                     </div>
                   ))}
                 </div>
@@ -450,14 +467,13 @@ export function SharedView({ token, Img }) {
 }
 
 // ---------------------------------------------------------------------
-// CSV-Backup: Export + Import (Collection und Watchlist in einer Datei)
+// CSV-Backup: Export + Import
 // ---------------------------------------------------------------------
 const COLS = ['liste', 'id', 'name', 'nummer', 'set', 'set_id', 'set_gesamt', 'anzahl', 'zustand', 'sprache', 'variante', 'preis', 'preis_manuell', 'einkaufspreis', 'verkauf', 'zielpreis', 'alarm_hoch', 'bewertung', 'bild', 'hinzugefuegt'];
 
 const comma = (n) => (n === null || n === undefined || n === '' ? '' : String(n).replace('.', ','));
 const num = (v) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : null; };
 const money = (v) => { const n = num(v); return n !== null && n >= 0 ? n.toFixed(2) : null; };
-// "PSA 10" / "BGS 9,5" -> { company, grade }
 const parseGrade = (v) => {
   const m = String(v || '').trim().match(/^([A-Za-z]+)\s*([0-9]+(?:[.,][0-9])?)$/);
   if (!m) return null;
@@ -584,7 +600,6 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
     if (!plan || !uid || busy) return;
     setBusy(true); setMsg('');
     try {
-      // Vollständige Kartendaten (Varianten, Preise, Bilder) vom Server holen; klappt das nicht, genügen die CSV-Daten
       const realIds = [...new Set([...plan.coll, ...plan.watch].map((r) => r.id).filter((id) => isReal(id)))];
       const full = {};
       let loadFailed = 0;
@@ -661,7 +676,9 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
     } catch (err) {
       console.error(err);
       setMsg('Import fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler') + ' – ein erneuter Import überspringt bereits vorhandene Karten.');
-    } finally { setBusy(false); setProgress(''); }
+    } finally {
+      setBusy(false); setProgress('');
+    }
   };
 
   return (
@@ -689,14 +706,13 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
 }
 
 // ---------------------------------------------------------------------
-// Watchlist als Cardmarket-Wantlist (eine Karte pro Zeile: "1x Name (Set)")
-// Cardmarket erwartet englische Namen/Set-Namen; sie werden über das Backend geholt.
+// Watchlist als Cardmarket-Wantlist
 // ---------------------------------------------------------------------
 export function WantlistExport({ watchlist, api }) {
   const [open, setOpen] = useState(false);
   const [withSet, setWithSet] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [names, setNames] = useState(null); // id -> { name, set }
+  const [names, setNames] = useState(null);
   const [msg, setMsg] = useState('');
 
   const lookup = async () => {
@@ -718,7 +734,9 @@ export function WantlistExport({ watchlist, api }) {
       setMsg(e.name === 'AbortError'
         ? 'Der Server hat nicht geantwortet – es wurden die gespeicherten (evtl. deutschen) Namen verwendet. Später nochmal versuchen für englische Namen.'
         : 'Englische Namen konnten nicht geladen werden – es wurden die gespeicherten Namen verwendet.');
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const toggle = async () => {
@@ -733,10 +751,9 @@ export function WantlistExport({ watchlist, api }) {
       const n = names[c.id];
       const isCm = String(c.id).startsWith('cm-');
       let name = n?.name || (isCm ? String(c.name || '') : plain(c.name));
-      // Cardmarket nimmt Pokémon-Karten nur mit Name + Fähigkeiten + Angriffen an (z. B. "Umbreon ex Moon Mirage Onyx")
       const extra = n ? [...(n.abilities || []), ...(n.attacks || [])] : [];
       if (extra.length) name = `${name} ${extra.join(' ')}`;
-      else if (isCm) { const m = name.match(/^([^\[]*?)\s*\[(.*)\]\s*$/); if (m) name = `${m[1]} ${m[2].split('|').map((a) => a.trim()).join(' ')}`; }
+      else if (isCm) { const m = name.match(/^([^\[']*?)\s*\[(.*)\]\s*$/); if (m) name = `${m[1]} ${m[2].split('|').map((a) => a.trim()).join(' ')}`; }
       const rawSet = n?.set || c.set?.name || '';
       const set = /^Cardmarket-Set /.test(rawSet) ? '' : rawSet;
       return { name, set };
