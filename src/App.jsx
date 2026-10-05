@@ -1829,8 +1829,8 @@ export default function App() {
             <SellerPlanner watchlist={watchlist} uid={auth.currentUser?.uid} />
             <BudgetPlanner watchlist={watchlist} uid={auth.currentUser?.uid} Img={CardImage} />
 
-{/* 📦 BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
-<div className="bg-slate-900/80 border border-cyan-500/30 rounded-xl p-3 shadow-lg mb-4">
+{/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
+      <div className="bg-slate-900/80 border border-cyan-500/30 rounded-xl p-3 shadow-lg mb-4">
   <div className="flex justify-between items-center">
     <div className="flex items-center gap-2">
       <span className="text-lg">📦</span>
@@ -1862,8 +1862,7 @@ export default function App() {
 	    
             Ersetze deinen angegebenen Code-Block 1:1 durch diese erweiterte Version mit dem Einklapp-Button und der {dropsOpen && (...)}-Bedingung:
 {todaysDrops.length > 0 && (
-        <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
-          <div className="flex justify-between items-center">
+        <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">          <div className="flex justify-between items-center">
             <h3 className="text-sm font-black text-emerald-300">
               📉 Heute günstiger geworden ({todaysDrops.length})
             </h3>
@@ -1874,6 +1873,7 @@ export default function App() {
               {dropsOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
             </button>
           </div>
+)}
 
           {dropsOpen && (
             <div className="space-y-2">
