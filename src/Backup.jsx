@@ -116,12 +116,14 @@ async function pushShare(uid, share, items, wish = []) {
   const wparts = [];
   for (let i = 0; i < cappedW.length; i += PART_SIZE) wparts.push(cappedW.slice(i, i + PART_SIZE));
   const showPrices = share.showPrices !== false;
+  const showWishPrices = share.showWishPrices !== false;
   const pieces = capped.reduce((s, it) => s + it.q, 0);
   const value = showPrices ? Math.round(capped.reduce((s, it) => s + (it.p || 0) * it.q, 0) * 100) / 100 : null;
   const meta = {
     uid,
     owner: auth.currentUser?.displayName || 'Trainer',
     showPrices,
+    showWishPrices,
     count: capped.length,
     pieces,
     value,
@@ -172,6 +174,7 @@ export function SharePanel({ collection, watchlist = [], ready, api }) {
   const showPrices = share ? share.showPrices !== false : true;
   const showCollection = share ? share.showCollection !== false : true;
   const showWishlist = share ? !!share.showWishlist : false;
+  const showWishPrices = share ? share.showWishPrices !== false : true;
 
   const [en, setEn] = useState({});
   useEffect(() => {
@@ -187,7 +190,7 @@ export function SharePanel({ collection, watchlist = [], ready, api }) {
   }, [watchlist, showWishlist, api, Object.keys(en).length]);
 
   const items = useMemo(() => (showCollection ? buildShareItems(collection, showPrices) : []), [collection, showPrices, showCollection]);
-  const wishItems = useMemo(() => (showWishlist ? buildWishItems(watchlist, showPrices, en) : []), [watchlist, showPrices, showWishlist, en]);
+  const wishItems = useMemo(() => (showWishlist ? buildWishItems(watchlist, showWishPrices, en) : []), [watchlist, showWishPrices, showWishlist, en]);
   const sig = useMemo(() => JSON.stringify([items, wishItems]), [items, wishItems]);
 
   useEffect(() => {
@@ -210,7 +213,7 @@ export function SharePanel({ collection, watchlist = [], ready, api }) {
     const sp = s.showPrices !== false;
     return {
       its: s.showCollection !== false ? buildShareItems(collection, sp) : [],
-      wish: s.showWishlist ? buildWishItems(watchlist, sp, en) : []
+      wish: s.showWishlist ? buildWishItems(watchlist, s.showWishPrices !== false, en) : []
     };
   };
 
@@ -220,7 +223,7 @@ export function SharePanel({ collection, watchlist = [], ready, api }) {
     if (!uid || busy) return;
     setBusy(true); setMsg('');
     try {
-      const fresh = { token: randomToken(), showPrices: true, showCollection: true, showWishlist: true, parts: 0, wishParts: 0, createdAt: Date.now() };
+      const fresh = { token: randomToken(), showPrices: true, showWishPrices: true, showCollection: true, showWishlist: true, parts: 0, wishParts: 0, createdAt: Date.now() };
       const b = build(fresh);
       const meta = await pushShare(uid, fresh, b.its, b.wish);
       lastSig.current = JSON.stringify([b.its, b.wish]);
@@ -310,6 +313,12 @@ export function SharePanel({ collection, watchlist = [], ready, api }) {
             <input type="checkbox" checked={showWishlist} disabled={busy} onChange={() => toggleFlag('showWishlist', showWishlist)} className="accent-cyan-500" />
             🎁 Wunschliste zeigen (Geschenkideen für Freunde, ohne deine Zielpreise)
           </label>
+          {showWishlist && (
+            <label className="flex items-center gap-2 text-xs text-slate-300 ml-6">
+              <input type="checkbox" checked={showWishPrices} disabled={busy} onChange={() => toggleFlag('showWishPrices', showWishPrices)} className="accent-cyan-500" />
+              Preise bei den Wünschen anzeigen (Cardmarket-Trend)
+            </label>
+          )}
           <p className="text-[10px] text-slate-500">
             {share.count ?? 0} Einträge{share.wishCount ? ` + ${share.wishCount} Wünsche` : ''} geteilt{share.updatedAt ? ` · Stand ${new Date(share.updatedAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}. Änderungen werden automatisch übernommen, solange die App offen ist.
           </p>
@@ -361,6 +370,7 @@ export function SharedView({ token, Img }) {
   const hasWish = wish.length > 0;
   const view = (onlyWish || tab === 'wish') && hasWish ? 'wish' : (hasColl ? 'coll' : 'wish');
   const hasPrices = !!meta?.showPrices;
+  const hasWishPrices = meta?.showWishPrices !== false;
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
     const list = items.filter((it) => !t || `${it.n} ${it.s} ${it.no}`.toLowerCase().includes(t));
@@ -418,7 +428,7 @@ export function SharedView({ token, Img }) {
                       <Img src={it.im} alt={it.n} className="w-full rounded-lg mb-2" />
                       <p className="text-xs font-bold text-slate-200 truncate">{it.n}{it.no ? <span className="text-slate-500 font-normal"> #{it.no}</span> : null}</p>
                       <p className="text-[10px] text-slate-400 truncate">{it.s || 'Unbekanntes Set'}</p>
-                      {hasPrices && it.p > 0 && <p className="text-xs text-cyan-400 font-bold mt-1">ca. {eur(it.p)}</p>}
+                      {hasWishPrices && it.p > 0 && <p className="text-xs text-cyan-400 font-bold mt-1">ca. {eur(it.p)}</p>}
                       {it.pr && <p className="text-xs text-amber-300">{'★'.repeat(it.pr)}<span className="text-slate-700">{'★'.repeat(3 - it.pr)}</span></p>}
                       <a href={it.u || `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(it.n)}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-cyan-400 underline">Auf Cardmarket suchen ↗</a>
                     </div>
