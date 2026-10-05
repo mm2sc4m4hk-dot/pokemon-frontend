@@ -92,7 +92,13 @@ function buildShareItems(collection, showPrices) {
 
 const prioOf = (c) => ([1, 2, 3].includes(Number(c?.priority)) ? Number(c.priority) : 2);
 const cmUrl = (c, n) => {
-  const q = n ? [n.name, ...(n.abilities || []), ...(n.attacks || [])].join(' ') : plain(c.name);
+  let q;
+  if (n && n.abbr && (n.number || c.number)) {
+    const no = String(n.number || c.number);
+    q = `${n.name} (${n.abbr} ${/^\d+$/.test(no) ? no.padStart(3, '0') : no})`;
+  } else {
+    q = n ? [n.name, ...(n.abilities || []), ...(n.attacks || [])].join(' ') : plain(c.name);
+  }
   return `https://www.cardmarket.com/en/Pokemon/Products/Search?searchString=${encodeURIComponent(q)}`;
 };
 
