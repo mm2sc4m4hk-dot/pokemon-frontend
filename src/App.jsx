@@ -500,6 +500,8 @@ function resizeImageFile(file, maxWidth = 500, quality = 0.7) {
 }
 
 export default function App() {
+  const [dropsOpen, setDropsOpen] = useState(true);
+  const [batchAddOpen, setBatchAddOpen] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
@@ -800,6 +802,13 @@ export default function App() {
     return points.map(p => ({ ...p, pct: Math.max(8, Math.round((p.value / max) * 100)) }));
   };
 
+  const normalizeSetName = (queryStr) => {
+  if (!queryStr) return '';
+  const q = queryStr.toLowerCase().trim();
+  if (q.includes('30 jahre') || q.includes('30th') || q.includes('30 j')) return '30th anniversary';
+  if (q.includes('25 jahre') || q.includes('25th') || q.includes('celebrations')) return 'celebrations';
+  return q;
+  };
   const handleSearch = async (e, override) => {
     if (e && e.preventDefault) e.preventDefault();
     const queryText = typeof override === 'string' ? override : searchQuery;
@@ -808,7 +817,8 @@ export default function App() {
     setSearchError('');
     try {
       const params = new URLSearchParams({ name: queryText });
-      if (searchSet.trim()) params.set('set', searchSet.trim());
+      const normalizedSet = normalizeSetName(searchSet);
+      if (normalizedSet) params.set('set', normalizedSet);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 45000);
@@ -1400,9 +1410,12 @@ export default function App() {
   };
   const dealCount = watchlist.filter(isDealCard).length;
   const todaysDrops = useMemo(
-    () => watchlist.map(dropInfo).filter(Boolean).sort((a, b) => a.pct - b.pct),
-    [watchlist]
+  () => watchlist.map(dropInfo).filter(Boolean).sort((a, b) => a.pct - b.pct),
+  [watchlist]
   );
+
+// Neu: Gesamtzahl der Preisalarme für das Badge
+  const alarmCount = dealCount + todaysDrops.length;
   const hasPriceHistory = watchlist.some((c) => c.priceDay);
 
   const sortedWatchlist = useMemo(() => {
@@ -2048,7 +2061,21 @@ export default function App() {
         <div className="max-w-md mx-auto flex justify-between items-center">
           <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">👤</span><span>Profil</span></button>
           <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🎴</span><span>Collection</span></button>
-          <button onClick={() => setActiveTab('watchlist')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg relative">★{dealCount > 0 && <span className="absolute -top-1 -right-3 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full px-1 leading-4">{dealCount}</span>}</span><span>Watchlist</span></button>
+          <button 
+  onClick={() => setActiveTab('watchlist')} 
+  className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}
+>
+  <div className="relative">
+    <span className="text-lg">★</span>
+    {alarmCount > 0 && (
+      <span className="absolute -top-1 -right-3.5 bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.5 rounded-full animate-pulse shadow-md">
+        {alarmCount}
+      </span>
+    )}
+  </div>
+  <span>Watchlist</span>
+</button>
+<span className="text-lg relative">★{dealCount > 0 && <span className="absolute -top-1 -right-3 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full px-1 leading-4">{dealCount}</span>}</span><span>Watchlist</span></button>
           <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🔍</span><span>Suchen</span></button>
         </div>
       </nav>
