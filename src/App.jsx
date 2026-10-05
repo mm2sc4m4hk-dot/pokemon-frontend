@@ -2061,21 +2061,22 @@ export default function App() {
         <div className="max-w-md mx-auto flex justify-between items-center">
           <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">👤</span><span>Profil</span></button>
           <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🎴</span><span>Collection</span></button>
+
           <button 
-  onClick={() => setActiveTab('watchlist')} 
-  className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}
->
-  <div className="relative">
-    <span className="text-lg">★</span>
-    {alarmCount > 0 && (
-      <span className="absolute -top-1 -right-3.5 bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.5 rounded-full animate-pulse shadow-md">
-        {alarmCount}
-      </span>
-    )}
-  </div>
-  <span>Watchlist</span>
-</button>
-<span className="text-lg relative">★{dealCount > 0 && <span className="absolute -top-1 -right-3 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full px-1 leading-4">{dealCount}</span>}</span><span>Watchlist</span></button>
+            onClick={() => setActiveTab('watchlist')} 
+            className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}
+          >
+            <div className="relative">
+              <span className="text-lg">★</span>
+              {alarmCount > 0 && (
+                <span className="absolute -top-1 -right-3.5 bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.5 rounded-full animate-pulse shadow-md">
+                  {alarmCount}
+                </span>
+              )}
+            </div>
+            <span>Watchlist</span>
+          </button>
+
           <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🔍</span><span>Suchen</span></button>
         </div>
       </nav>
