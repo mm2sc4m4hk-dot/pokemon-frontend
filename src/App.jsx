@@ -1391,16 +1391,17 @@ export default function App() {
   const fmtSigned = (n) => `${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(2)} €`;
 
   const filteredCollection = useMemo(() => {
-    let list = [...collection];
-    const q = collectionSearch.trim().toLowerCase();
+  let list = [...collection];
+  const q = collectionSearch.trim().toLowerCase();
 
-    if (q) {
-      const normalizedQ = normalizeSetName(q);
-      list = list.filter(i => 
-        (i.name || '').toLowerCase().includes(q) ||
-        (i.set?.name || '').toLowerCase().includes(normalizedQ)
-      );
-    }
+  if (q) {
+    const normalizedQ = normalizeSetName(q);
+    list = list.filter(i =>
+      (i.name || '').toLowerCase().includes(q) ||
+      (i.set?.name || '').toLowerCase().includes(normalizedQ) ||
+      String(i.number || '').toLowerCase().includes(q)
+    );
+  }
 
     if (filterLang !== 'Alle') {
       list = list.filter(i => i.userLanguage === filterLang);
@@ -1708,15 +1709,51 @@ export default function App() {
           </div>
         )}
 
-        {activeTab === 'collection' && (
+{activeTab === 'collection' && (
           <div className="space-y-4 fade-in">
             <div className="flex gap-2 overflow-x-auto pb-1">
               {[['cards', '🎴 Karten'], ['binder', '📒 Binder'], ['sets', '📊 Sets'], ['dex', '📖 Pokédex'], ['artist', '🎨 Artist'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`], ['sold', '🧾 Verkäufe'], ['trade', '🔁 Tausch']].map(([key, label]) => (
                 <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
               ))}
             </div>
-            <button onClick={() => setScanOpen('collection')} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md">📷 Karte scannen &amp; hinzufügen</button>
-            <button onClick={() => setBatchOpen(true)} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md">🗂️ Mehrere Karten per Foto</button>
+
+            {/* EINZEL-SCANNER BUTTON */}
+            <button onClick={() => setScanOpen('collection')} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md flex items-center justify-center gap-2">
+              📷 Einzelne Karte scannen &amp; hinzufügen
+            </button>
+
+            {/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
+            <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 shadow-lg">
+              <div className="flex justify-between items-center">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">📦</span>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-100">Booster-Pack Schnell-Eingabe</h3>
+                    <p className="text-[10px] text-slate-400">Mehrere Karten schnell erfassen</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setBatchAddOpen(!batchAddOpen)}
+                  className="text-xs font-bold text-cyan-400 hover:text-cyan-300 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 transition-colors"
+                >
+                  {batchAddOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
+                </button>
+              </div>
+
+              {batchAddOpen && (
+                <div className="mt-3 pt-3 border-t border-slate-800">
+                  <button
+                    onClick={() => setBatchOpen(true)}
+                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold py-2.5 px-4 rounded-lg shadow-md hover:brightness-110 transition-all flex items-center justify-center gap-2 text-xs"
+                  >
+                    <span>📷</span>
+                    <span>Batch-Scanner öffnen & Cards hinzufügen</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* PREIS-UPDATE BAR */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
               <button onClick={() => refreshPrices()} disabled={refreshing} className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-xs font-black px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
                 {refreshing ? '⏳ Lädt …' : '🔄 Preise aktualisieren'}
@@ -1726,13 +1763,14 @@ export default function App() {
               </p>
             </div>
 
+            {/* FILTER & SUCHE */}
             <div className={`bg-slate-900 border border-slate-800 p-3 rounded-xl grid grid-cols-2 md:grid-cols-4 gap-2 shadow-md ${collectionView !== 'cards' ? 'hidden' : ''}`}>
               <div className="relative col-span-2 md:col-span-4">
                 <input
                   type="text"
                   value={collectionSearch}
                   onChange={e => setCollectionSearch(e.target.value)}
-                  placeholder="In der Collection suchen, z.B. Glumanda"
+                  placeholder="In der Collection suchen (Name, Set oder Nummer)..."
                   className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 text-sm text-slate-200 rounded-lg pl-3 pr-9 py-2 outline-none"
                 />
                 {collectionSearch && (
@@ -1751,6 +1789,7 @@ export default function App() {
               </select>
             </div>
 
+            {/* VIEWS & KARTEN GRID */}
             {collectionView === 'sets' ? (
               <SetsView collection={collection} watchIds={watchlistIds} />
             ) : collectionView === 'binder' ? (
@@ -1828,38 +1867,6 @@ export default function App() {
             <WantlistExport watchlist={watchlist} api={API_URL} />
             <SellerPlanner watchlist={watchlist} uid={auth.currentUser?.uid} />
             <BudgetPlanner watchlist={watchlist} uid={auth.currentUser?.uid} Img={CardImage} />
-
-            {/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
-            <div className="bg-slate-900/80 border border-cyan-500/30 rounded-xl p-3 shadow-lg mb-4">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg">📦</span>
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-100">Booster-Pack Schnell-Eingabe</h3>
-                    <p className="text-[10px] text-slate-400">Mehrere Karten aus einem Pack schnell erfassen</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setBatchAddOpen(!batchAddOpen)}
-                  className="text-xs font-bold text-cyan-400 hover:text-cyan-300 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 transition-colors"
-                >
-                  {batchAddOpen ? 'Einklappen ▲' : 'Ausklappen ▼'}
-                </button>
-              </div>
-
-              {batchAddOpen && (
-                <div className="mt-3 pt-3 border-t border-slate-800">
-                  <button
-                    onClick={() => setBatchOpen(true)}
-                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold py-2 px-4 rounded-lg shadow-md hover:brightness-110 transition-all flex items-center justify-center gap-2 text-xs font-bold"
-                  >
-                    <span>📷</span>
-                    <span>Batch-Scanner öffnen & Cards hinzufügen</span>
-                  </button>
-                </div>
-              )}
-            </div>
-
             {todaysDrops.length > 0 && (
               <div className="bg-emerald-500/5 border border-emerald-500/40 rounded-xl p-3 space-y-2 shadow-lg">
                 <div className="flex justify-between items-center">
