@@ -1729,7 +1729,7 @@ export default function App() {
                   <span className="text-lg">📦</span>
                   <div>
                     <h3 className="text-sm font-bold text-slate-100">Booster-Pack Schnell-Eingabe</h3>
-                    <p className="text-[10px] text-slate-400">Mehrere Karten schnell erfassen</p>
+                    <p className="text-[10px] text-slate-400">Mehrere Karten nach Set &amp; Nummer erfassen</p>
                   </div>
                 </div>
                 <button
@@ -1741,13 +1741,56 @@ export default function App() {
               </div>
 
               {batchAddOpen && (
-                <div className="mt-3 pt-3 border-t border-slate-800">
+                <div className="mt-3 pt-3 border-t border-slate-800 space-y-3">
+                  {/* MANUELLE SET & NUMMERN-EINGABE */}
+                  <div className="bg-slate-950 p-3 rounded-lg border border-slate-800/80 space-y-2.5">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-300 block mb-1">1. Set auswählen</label>
+                      <select 
+                        value={batchSelectedSet || ''} 
+                        onChange={(e) => setBatchSelectedSet?.(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg p-2 outline-none focus:border-cyan-500"
+                      >
+                        <option value="">-- Set wählen --</option>
+                        {availableSets.filter(s => s !== 'Alle').map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-300 block mb-1">2. Kartennummern eingeben</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="z. B. 001, 012, 045, 120"
+                          value={batchCardNumbers || ''}
+                          onChange={(e) => setBatchCardNumbers?.(e.target.value)}
+                          className="flex-1 bg-slate-900 border border-slate-800 focus:border-cyan-500 text-xs text-slate-200 rounded-lg px-3 py-2 outline-none"
+                        />
+                        <button
+                          onClick={() => handleBatchAddByNumbers?.()}
+                          disabled={!batchSelectedSet || !batchCardNumbers}
+                          className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 font-bold text-xs px-4 py-2 rounded-lg transition-colors whitespace-nowrap shadow-md"
+                        >
+                          ➕ Hinzufügen
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1">Nummern kommagetrennt eingeben.</p>
+                    </div>
+                  </div>
+
+                  {/* TRENNLINIE ODER KAMERA */}
+                  <div className="flex items-center gap-2 py-1">
+                    <div className="h-px bg-slate-800 flex-1" />
+                    <span className="text-[10px] text-slate-500 font-bold uppercase">oder Kamera nutzen</span>
+                    <div className="h-px bg-slate-800 flex-1" />
+                  </div>
+
                   <button
                     onClick={() => setBatchOpen(true)}
-                    className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold py-2.5 px-4 rounded-lg shadow-md hover:brightness-110 transition-all flex items-center justify-center gap-2 text-xs"
+                    className="w-full bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-slate-700 font-bold py-2 px-3 rounded-lg transition-all flex items-center justify-center gap-2 text-xs"
                   >
                     <span>📷</span>
-                    <span>Batch-Scanner öffnen & Cards hinzufügen</span>
+                    <span>Batch-Foto / Scanner öffnen</span>
                   </button>
                 </div>
               )}
