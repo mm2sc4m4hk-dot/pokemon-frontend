@@ -131,41 +131,55 @@ function nameCandidatesFromOcr(raw) {
 export async function readCard(worker, card) {
   const cw = card.width, ch = card.height;
 
-  // Der bisherige Ausschnitt war zu schmal: bei vielen Karten wurden die ersten/letzten
-  // Zeichen des Namens abgeschnitten. Der Name darf praktisch die komplette obere Zeile nutzen.
-  const nameBox = [0.02 * cw, 0.012 * ch, 0.96 * cw, 0.145 * ch];
-  const numBox = [0.01 * cw, 0.875 * ch, 0.98 * cw, 0.125 * ch];
+  // Pokémon-Kartennamen sitzen etwas unterhalb der oberen Kante. Wir lesen bewusst
+  // mehrere Varianten und wählen später nicht einfach den ERSTEN OCR-Treffer.
+  const nameBoxes = [
+    [0.015 * cw, 0.010 * ch, 0.97 * cw, 0.17 * ch],
+    [0.035 * cw, 0.020 * ch, 0.90 * cw, 0.12 * ch],
+    [0.02 * cw, 0.035 * ch, 0.96 * cw, 0.11 * ch]
+  ];
+  const numBoxes = [
+    [0.01 * cw, 0.84 * ch, 0.98 * cw, 0.16 * ch],
+    [0.02 * cw, 0.88 * ch, 0.96 * cw, 0.10 * ch],
+    [0.02 * cw, 0.80 * ch, 0.96 * cw, 0.20 * ch]
+  ];
 
+  const nameRuns = [];
+  let nameThumb = null;
   const runName = async (canvas, psm) => {
     await worker.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: String(psm) });
     return worker.recognize(canvas);
   };
 
-  const nameRuns = [];
-  let nameThumb = null;
-
-  for (const [invert, threshold, psm] of [
-    ['auto', false, 7],
-    [false, false, 7],
-    [true, false, 7],
-    ['auto', true, 7],
-    ['auto', false, 6]
-  ]) {
-    const p = prepare(card, ...nameBox, 1200, invert, threshold);
-    const r = await runName(p.canvas, psm);
-    const raw = r?.data?.text || '';
-    const candidates = nameCandidatesFromOcr(raw);
-    if (candidates.length) {
-      nameRuns.push(...candidates);
-      if (!nameThumb) nameThumb = p.canvas;
+  for (const box of nameBoxes) {
+    for (const [invert, threshold, psm] of [
+      ['auto', false, 7],
+      [false, false, 7],
+      [true, false, 7],
+      ['auto', true, 7],
+      ['auto', false, 6]
+    ]) {
+      const p = prepare(card, ...box, 1500, invert, threshold);
+      const r = await runName(p.canvas, psm);
+      const raw = r?.data?.text || '';
+      const confidence = Number(r?.data?.confidence) || 0;
+      const candidates = nameCandidatesFromOcr(raw);
+      for (const candidate of candidates) nameRuns.push({ candidate, confidence });
+      if (!nameThumb && candidates.length) nameThumb = p.canvas;
     }
   }
 
-  // Doppelte Kandidaten entfernen, Reihenfolge/erste brauchbare OCR-Variante behalten.
-  const nameCandidates = [...new Set(nameRuns)].slice(0, 12);
-  let name = nameCandidates[0] || '';
+  // Kandidaten nach OCR-Confidence sortieren, aber ALLE Kandidaten behalten.
+  // So wird ein einzelnes falsches "eee" nicht automatisch zum Namen.
+  const nameCandidates = [...new Map(
+    nameRuns
+      .sort((a, b) => b.confidence - a.confidence)
+      .map((x) => [x.candidate, x])
+  ).values()].slice(0, 24).map((x) => x.candidate);
+  const name = nameCandidates[0] || '';
 
-  // Nummern brauchen eine harte Zeichenmenge, damit Karten-Text nicht als Nummer endet.
+  // Nummer separat mit mehreren Ausschnitten lesen. Wichtig: nicht die erste OCR-
+  // Variante übernehmen, weil diese bei Glanz häufig falsche Altwerte liefert.
   await worker.setParameters({
     tessedit_char_whitelist: '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-',
     tessedit_pageseg_mode: '11'
@@ -173,22 +187,25 @@ export async function readCard(worker, card) {
 
   const numberRuns = [];
   let numThumb = null;
-  for (const [invert, threshold] of [
-    ['auto', false],
-    [false, false],
-    [true, false],
-    ['auto', true]
-  ]) {
-    const q = prepare(card, ...numBox, 1600, invert, threshold);
-    const raw = (await worker.recognize(q.canvas))?.data?.text || '';
-    const parsed = parseNumber(raw);
-    if (parsed) numberRuns.push(parsed);
-    if (!numThumb) numThumb = q.canvas;
+  for (const box of numBoxes) {
+    for (const [invert, threshold] of [
+      ['auto', false],
+      [false, false],
+      [true, false],
+      ['auto', true]
+    ]) {
+      const q = prepare(card, ...box, 1800, invert, threshold);
+      const r = await worker.recognize(q.canvas);
+      const raw = r?.data?.text || '';
+      const parsed = parseNumber(raw);
+      const confidence = Number(r?.data?.confidence) || 0;
+      if (parsed) numberRuns.push({ parsed, confidence });
+      if (!numThumb && parsed) numThumb = q.canvas;
+    }
   }
 
-  // Häufig liefert ein OCR-Lauf 044/102 und ein anderer 44/102. Der Parser entscheidet,
-  // welche Variante gültig ist; die erste gültige bleibt die Anzeige.
-  const number = numberRuns[0] || '';
+  const number = numberRuns
+    .sort((a, b) => b.confidence - a.confidence)[0]?.parsed || '';
 
   const thumb = (c) => {
     try { return c ? c.toDataURL('image/jpeg', 0.6) : ''; }
@@ -202,7 +219,6 @@ export async function readCard(worker, card) {
     thumbs: { name: thumb(nameThumb), num: thumb(numThumb) }
   };
 }
-
 
 export async function loadImageSource(file) {
   if (window.createImageBitmap) {
@@ -298,53 +314,58 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
     addCandidate(first);
     (alternatives || []).forEach(addCandidate);
 
-    // Wenn OCR noch Müll vor den Namen setzt ("gaz Krebscorps"), werden auch die
-    // längsten einzelnen Wörter probiert. Das ist besonders hilfreich bei glänzenden Karten.
-    const tokenSource = candidates.join(' ');
-    tokenSource
-      .split(/\s+/)
-      .filter((x) => x.length >= 3)
-      .sort((a, b) => b.length - a.length)
-      .slice(0, 4)
-      .forEach(addCandidate);
+    // Auch einzelne Wörter versuchen: OCR liefert bei Glanz gerne z. B. "gaz Krebscorps".
+    candidates.slice().forEach((value) => {
+      value.split(/\s+/)
+        .filter((x) => x.length >= 3)
+        .sort((a, b) => b.length - a.length)
+        .slice(0, 4)
+        .forEach(addCandidate);
+    });
 
     if (!candidates.length && num) addCandidate(String(num));
-
     if (!onSearch) { setResults([]); return; }
 
     setSearching(true); setError(''); setNote('');
     try {
-      let list = [];
-      let usedQuery = '';
+      const all = [];
+      const seen = new Set();
+      const queries = [];
 
-      // Erst Name + Nummer, danach alternative OCR-Kandidaten.
-      for (const candidate of candidates.slice(0, 8)) {
+      // NICHT beim ersten Treffer abbrechen. Ein falscher OCR-Kandidat wie "eee"
+      // kann sonst echte Treffer wie "Igelavar" verhindern.
+      for (const candidate of candidates.slice(0, 12)) {
+        const q = num ? buildQuery(candidate, num) : candidate;
+        queries.push(q);
         try {
-          const q = num ? buildQuery(candidate, num) : candidate;
           const found = await onSearch(q);
-          if (Array.isArray(found) && found.length) {
-            list = found;
-            usedQuery = q;
-            break;
+          if (Array.isArray(found)) {
+            for (const card of found) {
+              if (card?.id && !seen.has(card.id)) {
+                seen.add(card.id);
+                all.push(card);
+              }
+            }
           }
-        } catch (e) {
-          // Einen einzelnen fehlgeschlagenen Kandidaten nicht den kompletten Scan abbrechen lassen.
-        }
+        } catch (e) { /* nächsten Kandidaten trotzdem versuchen */ }
       }
 
-      // Falls die Nummer stimmt, der Name aber komplett danebenliegt:
-      // nur nach der Kartennummer suchen und anschließend per Kartenbild ranken.
-      if (list.length === 0 && num) {
+      // Wenn Name OCR komplett danebenliegt, Nummer separat suchen.
+      if (!all.length && num) {
         try {
           const found = await onSearch(String(num).trim());
-          if (Array.isArray(found) && found.length) {
-            list = found;
-            usedQuery = String(num).trim();
-            setNote('Name war beim OCR unsicher – Treffer wurden zusätzlich über die Kartennummer und das Kartenbild gesucht.');
+          if (Array.isArray(found)) {
+            for (const card of found) {
+              if (card?.id && !seen.has(card.id)) {
+                seen.add(card.id);
+                all.push(card);
+              }
+            }
           }
         } catch (e) { /* weiter */ }
       }
 
+      let list = all;
       if (list.length > 1 && canvasRef.current && api) {
         try {
           const r = await rankByImage(canvasRef.current, list, api);
@@ -354,16 +375,15 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       }
 
       if (aliveRef.current) {
-        setResults(list);
-        if (list.length) {
-          // Wenn der Scanner über einen korrigierten Kandidaten oder nur über die
-          // Nummer gefunden hat, zeigen wir direkt den echten Kartennamen an.
-          const best = list[0];
+        const limited = list.slice(0, 24);
+        setResults(limited);
+        if (limited.length) {
+          const best = limited[0];
           if (best?.name) setName(String(best.name).replace(/\s*\[.*\]\s*$/, ''));
           if (best?.number) setNumber(String(best.number) + (best?.set?.total ? `/${best.set.total}` : ''));
-        }
-        if (usedQuery && usedQuery !== first && list.length) {
-          setNote((prev) => prev || `Treffer über OCR-Korrektur gefunden: „${usedQuery}“`);
+          if (queries.length > 1) {
+            setNote('Mehrere OCR-Kandidaten wurden geprüft und nach dem Kartenbild bewertet.');
+          }
         }
       }
     } catch (e) {
@@ -380,7 +400,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
 
   const runOcr = async (card) => {
     canvasRef.current = card; setScores({});
-    setPhase('reading'); setError(''); setResults(null); setNote(''); setStatus('Lade Texterkennung …');
+    setPhase('reading'); setError(''); setResults(null); setNote(''); setStatus('Lade Texterkennung …'); setName(''); setNumber(''); setThumbs(null);
     try {
       const worker = await getWorker((s) => aliveRef.current && setStatus(s));
       if (!aliveRef.current) return;
