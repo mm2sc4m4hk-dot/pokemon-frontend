@@ -439,18 +439,15 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
   const res = useJson(api, `/api/dex/${dex.id}`);
   const [filterQ, setFilterQ] = useState('');
   const [showAll, setShowAll] = useState(false);
-  const [extraAll, setExtraAll] = useState(false);
-  const [extra, setExtra] = useState({ loading: false, cards: [] });
+  const [extra, setExtra] = useState({ loading: true, cards: [] });
 
-// Zusätzlich per Namenssuche laden (findet auch Karten, die im Pokédex-Index fehlen)
+  // Lädt sofort beim Öffnen automatisch ALLE Karten per Namenssuche nach
   useEffect(() => {
-    const f = filterQ.trim();
-    if (!f && !extraAll) { setExtra({ loading: false, cards: [] }); return undefined; }
     let alive = true;
-    const t = setTimeout(async () => {
-      setExtra((e) => ({ ...e, loading: true }));
+    setExtra({ loading: true, cards: [] });
+
+    async function fetchAllByName() {
       try {
-        // Alle Karten des Pokémon holen – makeMatcher filtert sie im Frontend
         const params = new URLSearchParams({ name: dex.name });
         const r = await fetch(`${api}/api/cards?${params.toString()}`);
         const d = r.ok ? await r.json() : [];
@@ -467,9 +464,11 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
       } catch (e) {
         if (alive) setExtra({ loading: false, cards: [] });
       }
-    }, f ? 600 : 0);
-    return () => { alive = false; clearTimeout(t); };
-  }, [api, dex.name, filterQ, extraAll]);
+    }
+
+    fetchAllByName();
+    return () => { alive = false; };
+  }, [api, dex.name]);
 
   const base = res.data?.cards || [];
   const baseIds = new Set(base.map((c) => c.id));
@@ -491,6 +490,8 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
   const missingAll = all.filter((c) => !ownedIds.has(c.id) && match(`${c.name} ${c.set?.name || c.setName || ''}`));
   const missing = showAll ? missingAll : missingAll.slice(0, 48);
 
+  const isLoading = res.loading || extra.loading;
+
   return (
     <Modal
       onClose={onClose}
@@ -502,17 +503,10 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
       <SlotPhoto ui={photoUi} />
       <input value={filterQ} onChange={(e) => setFilterQ(e.target.value)} placeholder="Filtern nach Set oder Name …" className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
 
-      {extra.loading && <p className="text-[11px] text-cyan-400 animate-pulse mt-1">Suche zusätzlich per Name …</p>}
-      {!filterQ.trim() && !extraAll && (
-        <button onClick={() => setExtraAll(true)} className="w-full text-[11px] font-bold text-cyan-400 border border-slate-700 rounded-lg py-1.5 hover:bg-slate-800 mt-2">
-          Fehlt eine Karte? Zusätzlich per Namenssuche laden
-        </button>
-      )}
-
-      {res.loading && <Loading text="Lade Karten …" />}
+      {isLoading && <Loading text="Lade alle Karten …" />}
       {res.error && <ErrorBox text={`Karten konnten nicht geladen werden: ${res.error}`} />}
 
-      {!res.loading && (
+      {!isLoading && (
         <>
           <div>
             <p className="text-xs font-bold text-emerald-400 mb-2">In deiner Collection ({mine.length})</p>
