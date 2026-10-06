@@ -1,182 +1,230 @@
+// Karten-Scanner mit Gemini (Backend: POST /api/scan-genai).
+// Passt zu den Aufrufen in App.jsx:
+//   <CardScanner mode="collection"|"search" onClose onResult onSearch onPick Img owned api series onSeriesChange />
+// Exportiert außerdem readCard + loadImageSource für BatchScanner.jsx.
 import React, { useState, useRef } from 'react';
+import { buildQuery } from './scanParse';
+import { rankByImage } from './imageMatch';
+import { watchPrice } from './priceData';
+import { OwnedBadge } from './Backup';
 
-// Backend URL aus der Umgebungsvariable
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
-// ==========================================
-// Exporte für BatchScanner & KI-Anfragen
-// ==========================================
+const plain = (n) => String(n || '').replace(/\s*\[.*\]\s*$/, '');
+const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 
-export const loadImageSource = (file) => {
-  return new Promise((resolve, reject) => {
+// ==========================================
+// Exporte für BatchScanner
+// ==========================================
+export const loadImageSource = (file) =>
+  new Promise((resolve, reject) => {
     const reader = new FileReader();
+    reader.onerror = reject;
     reader.onload = (e) => {
       const img = new Image();
-      img.onload = () => {
-        resolve({ source: img, w: img.width, h: img.height });
-      };
       img.onerror = reject;
+      img.onload = () => resolve({ source: img, w: img.naturalWidth || img.width, h: img.naturalHeight || img.height });
       img.src = e.target.result;
     };
-    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-};
 
-export const readCard = async (base64Image) => {
-  const response = await fetch(`${API_URL}/api/scan-genai`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ image: base64Image }),
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Fehler beim Scannen der Karte.');
-  }
-
-  return data;
-};
-
-// ==========================================
-// Hauptkomponente CardScanner
-// ==========================================
-
-export default function CardScanner({ onSelectCard }) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [scanResult, setScanResult] = useState(null);
-  const fileInputRef = useRef(null);
-
-  // Bilddatei in Base64 umwandeln und für schnellen Upload schrumpfen
-  const processImage = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 1024;
-          const MAX_HEIGHT = 1024;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > height) {
-            if (width > MAX_WIDTH) {
-              height *= MAX_WIDTH / width;
-              width = MAX_WIDTH;
-            }
-          } else {
-            if (height > MAX_HEIGHT) {
-              width *= MAX_HEIGHT / height;
-              height = MAX_HEIGHT;
-            }
-          }
-
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL('image/jpeg', 0.85));
-        };
-        img.onerror = reject;
-        img.src = e.target.result;
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
+export const readCard = async (base64Image, api = API_URL) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 90000); // Render-Gratisplan kann schlafen
+  try {
+    const response = await fetch(`${api}/api/scan-genai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ image: base64Image })
     });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 429) throw new Error('Zu viele Scans auf einmal. Bitte kurz warten.');
+    if (!response.ok) throw new Error(data.error || `Fehler beim Scannen (Status ${response.status}).`);
+    return data;
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Der Server hat nicht geantwortet (schläft evtl.). Bitte gleich nochmal versuchen.');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+// Foto verkleinern (schneller Upload, unter dem 10-MB-Limit des Servers)
+function shrinkToCanvas(source, w, h, maxSide = 1280) {
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * scale);
+  c.height = Math.round(h * scale);
+  c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+  return c;
+}
+
+// ==========================================
+// Komponente
+// ==========================================
+export default function CardScanner({ mode = 'collection', onClose, onResult, onSearch, onPick, Img, owned, api = API_URL, series = false, onSeriesChange }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [preview, setPreview] = useState('');
+  const [scanned, setScanned] = useState(false);
+  const [name, setName] = useState('');
+  const [number, setNumber] = useState('');
+  const [cards, setCards] = useState([]);
+  const [scores, setScores] = useState({});
+  const canvasRef = useRef(null);
+
+  const rank = async (list) => {
+    if (list.length > 1 && canvasRef.current) {
+      try { return await rankByImage(canvasRef.current, list, api); } catch (e) { /* ohne Bildvergleich */ }
+    }
+    return { cards: list, scores: {} };
   };
 
-  const handleFileChange = async (event) => {
-    const file = event.target.files?.[0];
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
     if (!file) return;
-
-    setLoading(true);
-    setError(null);
-    setScanResult(null);
-
+    setBusy(true); setError(''); setScanned(false); setCards([]); setScores({});
     try {
-      const base64Image = await processImage(file);
-      const data = await readCard(base64Image);
-      setScanResult(data);
+      const { source, w, h } = await loadImageSource(file);
+      const canvas = shrinkToCanvas(source, w, h);
+      canvasRef.current = canvas;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      setPreview(dataUrl);
+
+      const data = await readCard(dataUrl, api);
+      const ai = data.aiAnalysis || {};
+      setName(ai.name || '');
+      setNumber(ai.number || '');
+
+      let list = Array.isArray(data.results) ? data.results : [];
+      if (list.length === 0 && ai.name && onSearch) {
+        try { list = await onSearch(buildQuery(ai.name, ai.number)); } catch (err) { /* unten: kein Treffer */ }
+        if (list.length === 0 && ai.number && onSearch) { try { list = await onSearch(ai.name); } catch (err) { /* egal */ } }
+      }
+      const ranked = await rank(list);
+      setCards(ranked.cards);
+      setScores(ranked.scores);
+      setScanned(true);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Scan fehlgeschlagen.');
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
   };
 
+  const research = async () => {
+    if (!name.trim() || !onSearch || busy) return;
+    setBusy(true); setError('');
+    try {
+      let list = await onSearch(buildQuery(name, number));
+      if (list.length === 0 && number) list = await onSearch(name.trim());
+      const ranked = await rank(list);
+      setCards(ranked.cards);
+      setScores(ranked.scores);
+      setScanned(true);
+    } catch (err) {
+      setError(err.message || 'Suche fehlgeschlagen.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const takeToSearch = () => {
+    if (!name.trim() || !onResult) return;
+    onResult({ query: buildQuery(name, number), name: name.trim(), number: String(number || '').trim() });
+  };
+
+  const inputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none';
+  const btnCls = 'block text-center cursor-pointer font-black py-3 rounded-xl text-sm transition-colors';
+
   return (
-    <div className="scanner-container" style={{ padding: '1rem', border: '1px dashed #ccc', borderRadius: '8px' }}>
-      <h3>Pokémon Karte Scannen</h3>
-
-      {/* Verstecktes File-Input (unterstützt sowohl Foto-Upload als auch direkte Smartphone-Kamera) */}
-      <input
-        type="file"
-        accept="image/*"
-        capture="environment"
-        ref={fileInputRef}
-        onChange={handleFileChange}
-        style={{ display: 'none' }}
-      />
-
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '1rem' }}>
-        <button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={loading}
-          style={{ padding: '10px 16px', cursor: 'pointer' }}
-        >
-          {loading ? 'Analysiere Bild...' : '📷 Foto aufnehmen / hochladen'}
-        </button>
+    <div className="fixed inset-0 z-[80] bg-slate-950 flex flex-col text-slate-100">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-500/20 bg-slate-900">
+        <h2 className="font-black text-cyan-400 text-sm">📷 Karte scannen (KI)</h2>
+        <button onClick={onClose} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400">Schließen ✕</button>
       </div>
 
-      {loading && <p>🤖 KI analysiert die Karte und sucht Datenbank-Treffer...</p>}
-
-      {error && <p style={{ color: 'red' }}>⚠️ {error}</p>}
-
-      {scanResult && (
-        <div className="scan-results" style={{ marginTop: '1rem' }}>
-          <h4>Erkannte Kartendaten:</h4>
-          <p>
-            <strong>Name:</strong> {scanResult.aiAnalysis?.name || 'Unbekannt'} |{' '}
-            <strong>Nummer:</strong> {scanResult.aiAnalysis?.number || 'Keine'} |{' '}
-            <strong>Sprache:</strong> {scanResult.aiAnalysis?.language || '-'}
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-xl mx-auto space-y-4">
+          <p className="text-xs text-slate-400">
+            Fotografiere eine einzelne Karte gerade von oben, ohne Blitz-Reflexe. Die KI liest Name und Nummer und sucht die Karte in der Datenbank.
           </p>
 
-          <h4 style={{ marginTop: '1rem' }}>Gefundene Treffer ({scanResult.results?.length || 0}):</h4>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '12px' }}>
-            {scanResult.results?.map((card) => (
-              <div
-                key={card.id}
-                onClick={() => onSelectCard && onSelectCard(card)}
-                style={{
-                  border: '1px solid #ddd',
-                  borderRadius: '6px',
-                  padding: '8px',
-                  cursor: 'pointer',
-                  textAlign: 'center'
-                }}
-              >
-                {card.images?.small && (
-                  <img src={card.images.small} alt={card.name} style={{ width: '100%', borderRadius: '4px' }} />
-                )}
-                <div style={{ fontWeight: 'bold', fontSize: '0.9rem', marginTop: '4px' }}>{card.name}</div>
-                <div style={{ fontSize: '0.8rem', color: '#666' }}>
-                  {card.set?.name} ({card.number})
-                </div>
-                {card.cardmarket?.prices?.trendPrice > 0 && (
-                  <div style={{ color: '#2e7d32', fontWeight: 'bold', marginTop: '4px' }}>
-                    €{card.cardmarket.prices.trendPrice.toFixed(2)}
-                  </div>
-                )}
-              </div>
-            ))}
+          <div className="grid grid-cols-2 gap-2">
+            <label className={`${btnCls} bg-cyan-500 hover:bg-cyan-400 text-slate-950 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+              📷 Kamera
+              <input type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" disabled={busy} />
+            </label>
+            <label className={`${btnCls} bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+              🖼️ Aus Galerie
+              <input type="file" accept="image/*" onChange={onFile} className="hidden" disabled={busy} />
+            </label>
           </div>
+
+          {mode === 'collection' && onSeriesChange && (
+            <label className="flex items-center gap-2 text-xs text-slate-300">
+              <input type="checkbox" checked={!!series} onChange={(e) => onSeriesChange(e.target.checked)} className="accent-cyan-500" />
+              Serienmodus: nach dem Hinzufügen direkt die nächste Karte scannen
+            </label>
+          )}
+
+          {busy && (
+            <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 text-xs text-cyan-300 flex items-center gap-2">
+              <span className="animate-spin">⚡</span> KI analysiert die Karte … (der Server braucht nach Inaktivität evtl. bis zu einer Minute)
+            </div>
+          )}
+          {error && <p className="text-xs text-rose-400">{error}</p>}
+
+          {preview && (
+            <div className="flex gap-3 items-start">
+              <img src={preview} alt="Scan" className="w-24 rounded-lg border border-slate-700 shrink-0" />
+              {scanned && (
+                <div className="flex-1 space-y-2">
+                  <p className="text-[10px] text-slate-400">Erkannt – bei Bedarf korrigieren:</p>
+                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={inputCls} />
+                  <input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="Nummer, z. B. 44/102" className={inputCls} />
+                  <button onClick={research} disabled={busy || !name.trim()} className="text-[11px] font-bold text-cyan-400 hover:underline disabled:opacity-40">Neu suchen</button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {scanned && mode === 'search' && (
+            <button onClick={takeToSearch} disabled={!name.trim()} className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 font-black py-3 rounded-xl text-sm">
+              🔍 „{buildQuery(name, number)}“ in der Suche öffnen
+            </button>
+          )}
+
+          {scanned && mode !== 'search' && (
+            cards.length === 0 ? (
+              <p className="text-xs text-amber-300">Keine passende Karte gefunden. Name/Nummer oben anpassen und „Neu suchen“ tippen.</p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs font-bold text-slate-200">Treffer ({cards.length}) – Karte antippen zum Hinzufügen</p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {cards.slice(0, 12).map((card) => (
+                    <button key={card.id} onClick={() => onPick && onPick(card)} className="text-left bg-slate-900 border border-slate-800 hover:border-cyan-500 rounded-xl p-2 space-y-1 transition-colors">
+                      {Img
+                        ? <Img src={card.images && card.images.small} alt={card.name} className="w-full rounded-lg" />
+                        : <img src={card.images && card.images.small} alt={card.name} className="w-full rounded-lg" />}
+                      <p className="text-xs font-bold text-slate-200 truncate">{plain(card.name)}{card.number ? <span className="text-slate-500 font-normal"> #{card.number}</span> : null}</p>
+                      <p className="text-[10px] text-slate-400 truncate">{(card.set && card.set.name) || 'Unbekanntes Set'}</p>
+                      <p className="text-[11px] text-cyan-400 font-bold">
+                        {eur(watchPrice(card.cardmarket && card.cardmarket.prices))}
+                        {scores[card.id] != null ? <span className="text-slate-500 font-normal"> · {scores[card.id]} % ähnlich</span> : null}
+                      </p>
+                      {owned && <OwnedBadge info={owned.get(card.id)} />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

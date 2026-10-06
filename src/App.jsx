@@ -27,8 +27,6 @@ import BatchScanner from './BatchScanner';
 import { SellAllCalculator, PortfolioSplit, RecordSaleModal, SalesHistory, NewSetsBanner, TradeCalculator, SellerPlanner } from './Features';
 import { BudgetPlanner, DataQualityCheck } from './Tools';
 
-// Verbindung zum Backend (nur für die Kartensuche über TCGdex, siehe server.js)
-const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
 const LANGUAGES = [
   { name: 'Deutsch 🇩🇪', factor: 1.0 },
