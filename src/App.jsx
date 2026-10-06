@@ -27,6 +27,7 @@ import BatchScanner from './BatchScanner';
 import { SellAllCalculator, PortfolioSplit, RecordSaleModal, SalesHistory, NewSetsBanner, TradeCalculator, SellerPlanner } from './Features';
 import { BudgetPlanner, DataQualityCheck } from './Tools';
 
+const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
 const LANGUAGES = [
   { name: 'Deutsch 🇩🇪', factor: 1.0 },
@@ -172,8 +173,6 @@ function ValueChart({ points }) {
   const diff = last.value - first.value;
   const pct = first.value > 0 ? (diff / first.value) * 100 : 0;
   const fmtDate = (d) => { const [, m, dd] = d.split('-'); return `${dd}.${m}.`; };
-const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
-
   return (
     <div className="space-y-2">
       <div className="flex justify-between items-end">
