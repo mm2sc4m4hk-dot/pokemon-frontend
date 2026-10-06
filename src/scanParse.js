@@ -2,17 +2,25 @@
 
 const STAGE = /^(basis|basic|phase|stage|stufe|restored)$/i;
 
+// "Entwickelt sich aus X" / "Evolves from X" inkl. Japanisch, Koreanisch, Chinesisch
+// JP: たね (Basis), 進化 (Entwicklung), から進化 (entwickelt sich aus)
+// KR: 진화 (Entwicklung), 에서 진화 (entwickelt sich aus)
+// CN: 進化 / 进化 (Entwicklung), 從...進化 / 从...进化 (entwickelt sich aus)
+const EVOLVES = /entwick|sich\s*aus|\bevolves?\b|\bfrom\b|évolue|evolu[ie]|から進化|進化|진화|에서\s*진화/i;
+
 // OCR-Text aus dem Namensbereich -> Kartenname.
 // Entfernt Entwicklungsstufe ("BASIS", "Phase 1"), KP/HP-Werte und Rauschen.
 export function cleanName(text) {
   const lines = String(text || '')
     .split(/\r?\n/)
-    .map((l) => l.replace(/[^A-Za-zÀ-ÿ0-9'’.:\- ♀♂]/g, ' ').replace(/\s+/g, ' ').trim())
+    .map((l) => l.replace(/[^A-Za-zÀ-ÿ0-9'’.:\- ♀♂\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/g, ' ').replace(/\s+/g, ' ').trim())
     .filter(Boolean);
 
   let best = '';
   let bestLetters = 0;
   for (const line of lines) {
+    if (EVOLVES.test(line)) continue; // Zeile "Entwickelt sich aus …" ist nicht der Kartenname
+
     let words = line.split(' ').filter(Boolean);
     if (words.length === 1 && STAGE.test(words[0])) continue; // Zeile besteht nur aus der Stufe
     while (words.length > 1 && (STAGE.test(words[0]) || /^\d$/.test(words[0]))) words.shift();
@@ -22,7 +30,9 @@ export function cleanName(text) {
     let cand = words.join(' ').replace(/^[-.:'’ ]+|[-.:'’ ]+$/g, '');
     // OCR liest das Stufen-Symbol oft als einzelnen Großbuchstaben vor dem Namen ("EGlumanda")
     cand = cand.replace(/^[A-Z](?=[A-Z][a-zà-ÿ]{2,})/, '');
-    const letters = (cand.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+
+    // Zählt lateinische Buchstaben sowie japanische (Hiragana/Katakana/Kanji), koreanische (Hangul) und chinesische Zeichen
+    const letters = (cand.match(/[A-Za-zÀ-ÿ\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/g) || []).length;
     if (letters > bestLetters) { best = cand; bestLetters = letters; }
   }
   return bestLetters >= 2 ? best : '';
