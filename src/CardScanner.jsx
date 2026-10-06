@@ -473,7 +473,8 @@ function dedupeCards(cards) {
 
 async function collectSearchResults(onSearch, ocr, onStatus) {
   const names = (ocr.nameCandidates || []).slice(0, 7).map((x) => x.value);
-  const number = String(ocr.number || '').trim();
+  const numberCandidates = (ocr.numberCandidates || []).slice(0, 6).map((x) => x.value);
+  const numbers = numberCandidates.length ? numberCandidates : (ocr.number ? [String(ocr.number).trim()] : []);
   const queries = [];
   const seen = new Set();
 
@@ -485,12 +486,13 @@ async function collectSearchResults(onSearch, ocr, onStatus) {
   };
 
   names.forEach((name) => {
-    if (number) add(buildQuery(name, number), 'name+number');
+    numbers.forEach((number) => add(buildQuery(name, number), 'name+number'));
   });
   names.forEach((name) => add(name, 'name'));
 
-  // Falls nur die Nummer sauber erkannt wurde, darf sie ebenfalls als Suchsignal dienen.
-  if (number) add(number, 'number');
+  // Jede starke Nummer ist ein eigener Suchanker. So darf ein einmaliger OCR-Ausreißer
+  // (z. B. 024/189 -> 44/102) nicht die komplette Suche auf den falschen Treffer festnageln.
+  numbers.forEach((number) => add(number, 'number'));
 
   const all = [];
   const used = [];
