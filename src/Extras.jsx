@@ -1316,7 +1316,23 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
     setPhotoBusy(true);
     try {
       const image = await shrinkImage(file);
-      await setDoc(photoRef(idx), { binderId: b.id, idx, cardId, image, updatedAt: Date.now() });
+      const isCustom = String(cardId).startsWith('custom-');
+      if (isCustom) {
+        const slot = slots[idx];
+        const nextSlot = slot ? { ...slot, image } : slot;
+        const batch = writeBatch(db);
+        if (nextSlot) batch.update(ref(b.id), { [`slots.${idx}`]: nextSlot });
+        batch.set(photoRef(idx), { binderId: b.id, idx, cardId, image, updatedAt: Date.now() });
+        try {
+          await batch.commit();
+        } catch (e) {
+          if (e?.code !== 'permission-denied' || !nextSlot) throw e;
+          await updateDoc(ref(b.id), { [`slots.${idx}`]: nextSlot });
+        }
+      } else {
+        await setDoc(photoRef(idx), { binderId: b.id, idx, cardId, image, updatedAt: Date.now() });
+      }
+      setTick((x) => x + 1);
     } finally { setPhotoBusy(false); }
   });
 
@@ -1327,20 +1343,48 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
       if (!cleanName || !file) throw new Error('Name und Foto sind erforderlich.');
       const image = await shrinkImage(file);
       const id = `custom-${Date.now()}`;
+      const slot = { id, name: cleanName, image, setName: '', localId: '' };
       const batch = writeBatch(db);
-      batch.update(ref(b.id), { [`slots.${idx}`]: { id, name: cleanName, image: '', setName: '', localId: '' } });
+      // Das Bild liegt zusätzlich im Slot als Fallback. So funktioniert eine eigene Karte
+      // auch dann, wenn die vorhandene binderPhotos-Regel nur bekannte Karten zulässt.
+      batch.update(ref(b.id), { [`slots.${idx}`]: slot });
       batch.set(photoRef(idx), { binderId: b.id, idx, cardId: id, image, updatedAt: Date.now() });
-      await batch.commit();
+      try {
+        await batch.commit();
+      } catch (e) {
+        // Kein neuer Firestore-Regelpfad nötig: Slot trotzdem mit dem Bild speichern.
+        // Die bestehende binderPhotos-Logik wird weiterhin versucht, wenn sie erlaubt ist.
+        if (e?.code !== 'permission-denied') throw e;
+        await updateDoc(ref(b.id), { [`slots.${idx}`]: slot });
+      }
+      setTick((x) => x + 1);
       setSlotIdx(null);
     } finally { setPhotoBusy(false); }
   });
   // Foto-Bereich nur für Slots mit einer Karte, die man (noch) nicht besitzt
   const photoUi = slotIdx !== null && current && !ownedIds.has(current.id)
     ? {
-      image: photoFor(slotIdx, current.id),
+      image: photoFor(slotIdx, current.id) || current.image || null,
       busy: photoBusy,
       onPick: (file) => savePhoto(slotIdx, current.id, file),
-      onRemove: () => guard(() => deleteDoc(photoRef(slotIdx)))
+      onRemove: () => guard(async () => {
+        const isCustom = String(current.id).startsWith('custom-');
+        if (isCustom) {
+          const nextSlot = { ...current, image: '' };
+          const batch = writeBatch(db);
+          batch.update(ref(b.id), { [`slots.${slotIdx}`]: nextSlot });
+          batch.delete(photoRef(slotIdx));
+          try {
+            await batch.commit();
+          } catch (e) {
+            if (e?.code !== 'permission-denied') throw e;
+            await updateDoc(ref(b.id), { [`slots.${slotIdx}`]: nextSlot });
+          }
+        } else {
+          await deleteDoc(photoRef(slotIdx));
+        }
+        setTick((x) => x + 1);
+      })
     }
     : null;
  
@@ -1426,7 +1470,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
                 className={`relative w-full aspect-[5/7] ${arrange ? 'select-none' : ''} ${drag && drag.from === idx ? 'opacity-30' : ''} ${drag && drag.over === idx && drag.over !== drag.from ? 'ring-2 ring-cyan-400 rounded-md' : ''}`}
               >
                 <button onClick={arrange ? undefined : (viewOnClick ? openDetail : () => setSlotIdx(idx))} className="relative block w-full h-full rounded-md overflow-hidden bg-slate-800 border border-slate-700 hover:border-cyan-500 transition-colors">
-                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || photo || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : 'opacity-40 grayscale'}`} />
+                  <Img src={(have && item?.customImage) || (have && item?.images?.small) || photo || slot.image} alt={slot.name} className={`w-full h-full object-cover ${have ? '' : 'opacity-70 grayscale'}`} />
                   <span className={`absolute bottom-1 left-1 text-[9px] font-black px-1.5 py-0.5 rounded ${have ? 'bg-emerald-500 text-slate-950' : 'bg-slate-950/80 text-amber-300 border border-amber-500/40'}`}>{have ? '✓' : photo ? 'fehlt 📷' : 'fehlt'}</span>
                   {isDex && <span className="absolute top-1 left-1 text-[9px] font-bold bg-slate-950/80 text-slate-300 rounded px-1">#{pad(dexNo)}</span>}
                   {opening === idx && <span className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-cyan-300 text-xs font-bold animate-pulse">Lade …</span>}
