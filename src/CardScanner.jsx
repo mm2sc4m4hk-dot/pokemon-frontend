@@ -132,24 +132,27 @@ function nameCandidatesFromOcr(raw) {
 function normalizeNumberOcr(raw) {
   return String(raw || '')
     .normalize('NFKC')
-    .replace(/[Oo]/g, '0')
-    .replace(/[Il|]/g, '1')
+    .replace(/[OoQqDd]/g, '0')
+    .replace(/[Il|!]/g, '1')
     .replace(/[Ss]/g, '5')
     .replace(/[Bb]/g, '8')
-    .replace(/[Gg]/g, '6');
+    .replace(/[Gg]/g, '6')
+    .replace(/[Zz]/g, '2')
+    .replace(/[Tt]/g, '7');
 }
 
 function extractCardNumbers(raw) {
   const text = normalizeNumberOcr(raw)
     .replace(/[—–−]/g, '-')
-    .replace(/[\\]/g, '/');
+    .replace(/[\\]/g, '/')
+    .replace(/[：:]/g, '/')
+    .replace(/[.,]/g, ' ')
+    .replace(/[_=]+/g, ' ');
   const out = [];
   const add = (a, b) => {
     const aa = String(a || '').replace(/\D/g, '');
     const bb = String(b || '').replace(/\D/g, '');
     if (!aa || !bb || aa.length > 4 || bb.length > 4) return;
-    // Eine gültige TCG-Nummer hat praktisch immer einen sinnvollen Gesamtwert.
-    // OCR-Treffer wie "002/0" oder "008/5" sind fast immer Regeltext-Müll.
     const total = Number(bb);
     const index = Number(aa);
     if (!Number.isFinite(total) || !Number.isFinite(index) || total < 10 || index > total) return;
@@ -157,12 +160,13 @@ function extractCardNumbers(raw) {
     if (!out.includes(value)) out.push(value);
   };
 
-  // Normalfall: 024/189, 44/102, 195/198 usw.
+  // Klassisch: 024/189, 24/189, 024-189.
   for (const m of text.matchAll(/(?:^|[^0-9])([0-9]{1,4})\s*[/\-]\s*([0-9]{1,4})(?:[^0-9]|$)/g)) add(m[1], m[2]);
-  // OCR setzt gelegentlich Leerzeichen: 024 / 189 oder 024 189.
-  for (const m of text.matchAll(/(?:^|[^0-9])([0-9]{1,4})\s+([0-9]{1,4})(?:[^0-9]|$)/g)) add(m[1], m[2]);
-  // Häufige TCG-Schreibweise mit Set-Präfix: SV044/198, TG05/30 etc.
+  // OCR verliert den Slash gerne: 024 189 oder 024\n189.
+  for (const m of text.matchAll(/(?:^|[^0-9])([0-9]{1,4})\s{1,8}([0-9]{1,4})(?:[^0-9]|$)/g)) add(m[1], m[2]);
+  // Auch Präfixe wie SV044/198.
   for (const m of text.matchAll(/(?:[A-Z]{1,4}\s*)?([0-9]{1,4})\s*[/\-]\s*([0-9]{1,4})/gi)) add(m[1], m[2]);
+
   return out;
 }
 
@@ -200,25 +204,6 @@ function scoreNameCandidate(candidate, confidence, occurrences) {
   return score;
 }
 
-function normalizeCardNumber(value) {
-  const raw = String(value ?? '').normalize('NFKC').trim();
-  if (!raw) return '';
-  const m = raw.match(/(?:^|[^0-9])0*(\d{1,4})\s*[/\-]\s*0*(\d{1,4})(?:$|[^0-9])/);
-  if (!m) return '';
-  const index = Number(m[1]);
-  const total = Number(m[2]);
-  if (!Number.isFinite(index) || !Number.isFinite(total) || !total || index > total) return '';
-  return `${index}/${total}`;
-}
-
-function cardHasNumber(card, wanted) {
-  const target = normalizeCardNumber(wanted);
-  if (!target || !card) return false;
-  const cardNumber = normalizeCardNumber(card.number);
-  const total = normalizeCardNumber(card.set?.total ? `${card.number}/${card.set.total}` : '');
-  return cardNumber === target || total === target;
-}
-
 function scoreCardNumber(parsed, confidence, occurrences, boxIndex) {
   let score = Number(confidence) || 0;
   score += Math.min(36, (occurrences || 1) * 9);
@@ -248,14 +233,14 @@ export async function readCard(worker, card) {
     [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.135 * ch]
   ];
   const numBoxes = [
-    // Pokémon-Kartennummern stehen bei den normalen Karten unten LINKS
-    // (z. B. 024/189). Die bisherigen Boxen lagen überwiegend rechts und
-    // haben deshalb oft Regeltext statt der Nummer gelesen.
-    [0.02 * cw, 0.875 * ch, 0.42 * cw, 0.105 * ch],
-    [0.00 * cw, 0.835 * ch, 0.58 * cw, 0.145 * ch],
-    [0.06 * cw, 0.905 * ch, 0.40 * cw, 0.075 * ch],
-    // Fallback für andere Kartenlayouts.
-    [0.00 * cw, 0.84 * ch, 0.98 * cw, 0.16 * ch]
+    // Nummer nicht zu knapp croppen: je nach Set sitzt sie etwas höher/tiefer.
+    // Wir lesen deshalb mehrere überlappende Bereiche am unteren Kartenrand.
+    [0.00 * cw, 0.805 * ch, 0.58 * cw, 0.195 * ch],
+    [0.00 * cw, 0.855 * ch, 0.48 * cw, 0.145 * ch],
+    [0.00 * cw, 0.900 * ch, 0.55 * cw, 0.100 * ch],
+    [0.00 * cw, 0.775 * ch, 0.72 * cw, 0.225 * ch],
+    // Fallback für andere Layouts: kompletter unterer Bereich.
+    [0.00 * cw, 0.740 * ch, 1.00 * cw, 0.260 * ch]
   ];
 
   const nameRuns = [];
@@ -278,7 +263,7 @@ export async function readCard(worker, card) {
       const raw = r?.data?.text || '';
       const confidence = Number(r?.data?.confidence) || 0;
       const candidates = nameCandidatesFromOcr(raw);
-      for (const candidate of candidates) nameRuns.push({ candidate, confidence });
+      for (const candidate of candidates) nameRuns.push({ candidate, confidence, boxIndex: nameBoxes.indexOf(box) });
       if (!nameThumb && candidates.length) nameThumb = p.canvas;
     }
   }
@@ -306,8 +291,10 @@ export async function readCard(worker, card) {
 
   // Nummer separat mit mehreren Ausschnitten lesen. Wichtig: nicht die erste OCR-
   // Variante übernehmen, weil diese bei Glanz häufig falsche Altwerte liefert.
+  // Für die Nummer ausschließlich Ziffern/Trennzeichen zulassen. Wenn Buchstaben
+  // gleichzeitig erlaubt sind, macht Tesseract aus 024/189 schnell Müll wie TT TE.
   await worker.setParameters({
-    tessedit_char_whitelist: '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-',
+    tessedit_char_whitelist: '0123456789/.-',
     tessedit_pageseg_mode: '11'
   });
 
@@ -316,14 +303,16 @@ export async function readCard(worker, card) {
   for (let boxIndex = 0; boxIndex < numBoxes.length; boxIndex++) {
     const box = numBoxes[boxIndex];
     for (const [invert, threshold, psm] of [
+      ['auto', false, 6],
       ['auto', false, 7],
       [false, false, 7],
       [true, false, 7],
       ['auto', true, 7],
+      ['auto', false, 11],
       ['auto', false, 13]
     ]) {
       await worker.setParameters({
-        tessedit_char_whitelist: '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-',
+        tessedit_char_whitelist: '0123456789/.-',
         tessedit_pageseg_mode: String(psm)
       });
       const q = prepare(card, ...box, 2000, invert, threshold);
@@ -346,9 +335,11 @@ export async function readCard(worker, card) {
       boxIndex: Math.min(prev?.boxIndex ?? 99, run.boxIndex ?? 99)
     });
   }
-  const number = [...numberMap.values()]
+  const rankedNumbers = [...numberMap.values()]
     .map((x) => ({ ...x, score: scoreCardNumber(x.parsed, x.confidence, x.occurrences, x.boxIndex) }))
-    .sort((a, b) => b.score - a.score)[0]?.parsed || '';
+    .sort((a, b) => b.score - a.score);
+  const numberCandidates = rankedNumbers.slice(0, 24).map((x) => x.parsed);
+  const number = numberCandidates[0] || '';
 
   const thumb = (c) => {
     try { return c ? c.toDataURL('image/jpeg', 0.6) : ''; }
@@ -359,6 +350,7 @@ export async function readCard(worker, card) {
     name,
     nameCandidates,
     number,
+    numberCandidates,
     thumbs: { name: thumb(nameThumb), num: thumb(numThumb) }
   };
 }
@@ -445,9 +437,8 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
     return undefined;
   }, [phase]);
 
-  const doSearch = async (n, num, alternatives = []) => {
+  const doSearch = async (n, num, alternatives = [], numberAlternatives = []) => {
     const first = String(n || '').trim();
-    const wantedNumber = normalizeCardNumber(num);
     const candidates = [];
     const addCandidate = (value) => {
       const x = String(value || '').trim();
@@ -458,6 +449,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
     addCandidate(first);
     (alternatives || []).forEach(addCandidate);
 
+    // Auch einzelne Wörter versuchen: OCR liefert bei Glanz gerne z. B. "gaz Krebscorps".
     candidates.slice().forEach((value) => {
       value.split(/\s+/)
         .filter((x) => x.length >= 3)
@@ -466,7 +458,14 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
         .forEach(addCandidate);
     });
 
-    if (!candidates.length && wantedNumber) addCandidate(wantedNumber);
+    const nums = [];
+    const addNum = (value) => {
+      const x = String(value || '').trim();
+      if (x && !nums.includes(x)) nums.push(x);
+    };
+    addNum(num);
+    (numberAlternatives || []).forEach(addNum);
+    if (!candidates.length && nums.length) nums.slice(0, 6).forEach(addCandidate);
     if (!onSearch) { setResults([]); return; }
 
     setSearching(true); setError(''); setNote('');
@@ -475,32 +474,11 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       const seen = new Set();
       const queries = [];
 
-      // WICHTIG: Bei erkannter Kartennummer zuerst die Nummer suchen.
-      // Der OCR-Name kann kompletter Müll sein (z. B. "Fon meter SE"),
-      // die Nummer ist dagegen oft eindeutig.
-      if (wantedNumber) {
-        const numberQueries = [wantedNumber, String(num).trim(), wantedNumber.replace(/^0+/, '')];
-        for (const q of [...new Set(numberQueries.filter(Boolean))]) {
-          queries.push(q);
-          try {
-            const found = await onSearch(q);
-            if (Array.isArray(found)) {
-              for (const card of found) {
-                if (card?.id && !seen.has(card.id)) {
-                  seen.add(card.id);
-                  all.push(card);
-                }
-              }
-            }
-          } catch (e) { /* nächste Abfrage trotzdem versuchen */ }
-        }
-      }
-
-      // Danach Name + Nummer und Name allein. Diese Abfragen dienen dazu,
-      // Kandidaten zu finden, falls die API die Nummer nicht alleine akzeptiert.
+      // NICHT beim ersten Treffer abbrechen. Ein falscher OCR-Kandidat wie "eee"
+      // kann sonst echte Treffer wie "Igelavar" verhindern.
       for (const candidate of candidates.slice(0, 12)) {
-        const queriesForCandidate = wantedNumber
-          ? [buildQuery(candidate, num), candidate]
+        const queriesForCandidate = nums.length
+          ? [...nums.slice(0, 8).map((x) => buildQuery(candidate, x)), candidate]
           : [candidate];
         for (const q of queriesForCandidate) {
           queries.push(q);
@@ -518,30 +496,24 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
         }
       }
 
-      // Wenn die API bei der Nummer allein nichts liefert, trotzdem alle
-      // Namensresultate behalten – sie werden unten anhand der Nummer gefiltert.
-      let list = all;
-
-      // HARTE NUMMERNREGEL:
-      // Sobald OCR eine gültige Nummer erkannt hat, dürfen Karten mit einer
-      // anderen Nummer NICHT mehr als Treffer angezeigt/gerankt werden.
-      // Genau das verhindert Fälle wie: Igelavar 024/189 -> Espeon/Laukaps.
-      if (wantedNumber) {
-        const exact = all.filter((card) => cardHasNumber(card, wantedNumber));
-        if (exact.length) {
-          list = exact;
-          setNote('Kartennummer erkannt: Es werden nur Treffer mit exakt dieser Nummer berücksichtigt.');
-        } else {
-          // Kein API-Treffer mit exakt dieser Nummer: lieber nichts Falsches
-          // behaupten als eine Karte mit falscher Nummer anzeigen.
-          list = [];
-          setNote(`Die Nummer ${wantedNumber} wurde erkannt, aber keine Karte mit exakt dieser Nummer gefunden. Prüfe die Nummer oder suche erneut.`);
+      // Wenn Name OCR komplett danebenliegt, Nummer separat suchen.
+      if (!all.length && nums.length) {
+        for (const numCandidate of nums.slice(0, 8)) {
+          try {
+            const found = await onSearch(String(numCandidate).trim());
+            if (Array.isArray(found)) {
+              for (const card of found) {
+                if (card?.id && !seen.has(card.id)) {
+                  seen.add(card.id);
+                  all.push(card);
+                }
+              }
+            }
+          } catch (e) { /* nächsten Nummernkandidaten versuchen */ }
         }
       }
 
-      // Bildvergleich NUR innerhalb der bereits per Nummer validierten Menge.
-      // Dadurch kann ein optisch ähnlicher, aber falscher Treffer die Nummer nicht
-      // mehr überstimmen.
+      let list = all;
       if (list.length > 1 && canvasRef.current && api) {
         try {
           const r = await rankByImage(canvasRef.current, list, api);
@@ -557,7 +529,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
           const best = limited[0];
           if (best?.name) setName(String(best.name).replace(/\s*\[.*\]\s*$/, ''));
           if (best?.number) setNumber(String(best.number) + (best?.set?.total ? `/${best.set.total}` : ''));
-          if (queries.length > 1 && !wantedNumber) {
+          if (queries.length > 1) {
             setNote('Mehrere OCR-Kandidaten wurden geprüft und nach dem Kartenbild bewertet.');
           }
         }
@@ -593,7 +565,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       if (!read.name && !read.number) {
         setError('Name und Nummer wurden nicht sicher erkannt. Trage sie unten ein oder scanne nochmal (Karte möglichst plan, gut beleuchtet und ohne Spiegelung).');
       } else {
-        await doSearch(read.name, read.number, read.nameCandidates);
+        await doSearch(read.name, read.number, read.nameCandidates, read.numberCandidates);
       }
     } catch (e) {
       if (!aliveRef.current) return;
