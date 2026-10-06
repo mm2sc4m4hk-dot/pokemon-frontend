@@ -79,7 +79,7 @@ function prepare(src, x, y, w, h, targetW, invert = 'auto', threshold = false) {
   const doInvert = invert === 'auto' ? sum / n < 100 : !!invert;
   for (let p = 0, i = 0; p < n; p++, i += 4) {
     const v = doInvert ? 255 - gray[p] : gray[p];
-    const out = threshold ? (v >= 160 ? 255 : 0) : v;
+    const out = threshold ? (v >= (typeof threshold === 'number' ? threshold : 160) ? 255 : 0) : v;
     d[i] = d[i + 1] = d[i + 2] = out; d[i + 3] = 255;
   }
   ctx.putImageData(img, 0, 0);
@@ -167,6 +167,17 @@ function extractCardNumbers(raw) {
   // Auch Präfixe wie SV044/198.
   for (const m of text.matchAll(/(?:[A-Z]{1,4}\s*)?([0-9]{1,4})\s*[/\-]\s*([0-9]{1,4})/gi)) add(m[1], m[2]);
 
+  // Wenn Tesseract den Slash komplett verschluckt, kann z.B. 024189 als
+  // zusammenhängende Ziffernfolge übrig bleiben. Nur plausible 3+2..4-
+  // Aufteilungen zulassen und niemals blind aus kurzen Fragmenten raten.
+  for (const m of text.matchAll(/(?:^|[^0-9])([0-9]{5,8})(?:[^0-9]|$)/g)) {
+    const digits = m[1];
+    for (let cut = 2; cut <= 4; cut++) {
+      const a = digits.slice(0, cut), b = digits.slice(cut);
+      if (b.length >= 2 && b.length <= 4) add(a, b);
+    }
+  }
+
   return out;
 }
 
@@ -233,14 +244,17 @@ export async function readCard(worker, card) {
     [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.135 * ch]
   ];
   const numBoxes = [
-    // Nummer nicht zu knapp croppen: je nach Set sitzt sie etwas höher/tiefer.
-    // Wir lesen deshalb mehrere überlappende Bereiche am unteren Kartenrand.
-    [0.00 * cw, 0.805 * ch, 0.58 * cw, 0.195 * ch],
-    [0.00 * cw, 0.855 * ch, 0.48 * cw, 0.145 * ch],
-    [0.00 * cw, 0.900 * ch, 0.55 * cw, 0.100 * ch],
-    [0.00 * cw, 0.775 * ch, 0.72 * cw, 0.225 * ch],
-    // Fallback für andere Layouts: kompletter unterer Bereich.
-    [0.00 * cw, 0.740 * ch, 1.00 * cw, 0.260 * ch]
+    // Die Setnummer sitzt bei modernen Karten meist unten links, aber je nach
+    // Layout/Set etwas höher, weiter rechts oder näher am Rand. Deshalb lesen
+    // wir mehrere überlappende Streifen statt nur einen festen Ausschnitt.
+    [0.00 * cw, 0.785 * ch, 0.48 * cw, 0.215 * ch],
+    [0.00 * cw, 0.835 * ch, 0.58 * cw, 0.165 * ch],
+    [0.00 * cw, 0.885 * ch, 0.62 * cw, 0.115 * ch],
+    [0.12 * cw, 0.785 * ch, 0.55 * cw, 0.215 * ch],
+    [0.20 * cw, 0.785 * ch, 0.65 * cw, 0.215 * ch],
+    [0.38 * cw, 0.785 * ch, 0.62 * cw, 0.215 * ch],
+    [0.00 * cw, 0.735 * ch, 1.00 * cw, 0.265 * ch],
+    [0.00 * cw, 0.680 * ch, 1.00 * cw, 0.320 * ch]
   ];
 
   const nameRuns = [];
@@ -305,9 +319,14 @@ export async function readCard(worker, card) {
     for (const [invert, threshold, psm] of [
       ['auto', false, 6],
       ['auto', false, 7],
+      ['auto', false, 8],
       [false, false, 7],
       [true, false, 7],
-      ['auto', true, 7],
+      ['auto', 120, 7],
+      ['auto', 145, 7],
+      ['auto', 175, 7],
+      ['auto', 200, 7],
+      ['auto', 145, 6],
       ['auto', false, 11],
       ['auto', false, 13]
     ]) {
@@ -537,7 +556,13 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       if (!aliveRef.current) return;
       setName(read.name); setNumber(read.number); setThumbs(read.thumbs);
 
-      if (mode === 'search' && read.name) {
+      if (mode === 'search' && (read.name || read.number)) {
+        // Auch im Suchmodus dieselben Kandidaten verwenden. Ein einzelner
+        // schlechter OCR-Treffer wie "STON" darf nicht die Suche festlegen.
+        if (onSearch) {
+          await doSearch(read.name, read.number, read.nameCandidates, read.numberCandidates);
+          return;
+        }
         onResult({ query: buildQuery(read.name, read.number), name: read.name, number: read.number });
         return;
       }
