@@ -442,7 +442,7 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
   const [extraAll, setExtraAll] = useState(false);
   const [extra, setExtra] = useState({ loading: false, cards: [] });
 
-  // Zusätzlich per Namenssuche laden (findet auch Karten, die im Pokédex-Index fehlen)
+// Zusätzlich per Namenssuche laden (findet auch Karten, die im Pokédex-Index fehlen)
   useEffect(() => {
     const f = filterQ.trim();
     if (!f && !extraAll) { setExtra({ loading: false, cards: [] }); return undefined; }
@@ -450,14 +450,19 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
     const t = setTimeout(async () => {
       setExtra((e) => ({ ...e, loading: true }));
       try {
+        // Alle Karten des Pokémon holen – makeMatcher filtert sie im Frontend
         const params = new URLSearchParams({ name: dex.name });
-        const s = normSetName(f);
-        if (s) params.set('set', s);
         const r = await fetch(`${api}/api/cards?${params.toString()}`);
         const d = r.ok ? await r.json() : [];
         const cards = (Array.isArray(d) ? d : [])
           .filter((c) => c.id && !String(c.id).startsWith('cm-'))
-          .map((c) => ({ id: c.id, name: c.name, image: c.images?.small || '', setName: c.set?.name || '', localId: c.number || '' }));
+          .map((c) => ({
+            id: c.id,
+            name: c.name,
+            image: c.images?.small || c.image || '',
+            setName: c.set?.name || c.setName || '',
+            localId: c.number || c.localId || ''
+          }));
         if (alive) setExtra({ loading: false, cards });
       } catch (e) {
         if (alive) setExtra({ loading: false, cards: [] });
