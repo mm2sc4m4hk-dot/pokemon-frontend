@@ -436,13 +436,14 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
   const match = makeMatcher(filterQ);
 
 
-  const mine = [];
+const mine = [];
   const seen = new Set();
   collection.forEach((c) => {
     if (!c.id || seen.has(c.id)) return;
     if ((Array.isArray(c.dexId) && c.dexId.includes(dex.id)) || dexCardIds.has(c.id)) {
       seen.add(c.id);
-      if (match(`${c.name} ${c.set?.name || ''}`)) mine.push(c);
+      const setName = c.set?.name || c.setName || '';
+      if (match(`${c.name} ${setName}`)) mine.push(c);
     }
   });
   const missingAll = all.filter((c) => !ownedIds.has(c.id) && match(`${c.name} ${c.setName || ''}`));
