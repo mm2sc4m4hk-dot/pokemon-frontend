@@ -2,7 +2,7 @@
 // Passt zu den Aufrufen in App.jsx:
 //   <CardScanner mode="collection"|"search" onClose onResult onSearch onPick Img owned api series onSeriesChange />
 // Exportiert außerdem readCard + loadImageSource für BatchScanner.jsx.
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { buildQuery } from './scanParse';
 import { rankByImage } from './imageMatch';
 import { watchPrice } from './priceData';
@@ -12,6 +12,8 @@ const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.on
 
 const plain = (n) => String(n || '').replace(/\s*\[.*\]\s*$/, '');
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const LANG_LABEL = { de: 'Deutsch', en: 'Englisch', ja: 'Japanisch', ko: 'Koreanisch', zh: 'Chinesisch' };
 
 // ==========================================
 // Exporte für BatchScanner
@@ -29,7 +31,8 @@ export const loadImageSource = (file) =>
     reader.readAsDataURL(file);
   });
 
-export const readCard = async (base64Image, api = API_URL) => {
+// Ein Versuch. Der Server wiederholt bei Überlastung selbst (3.8 -> gemini-2.0-flash).
+async function readCardOnce(base64Image, api) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90000); // Render-Gratisplan kann schlafen
   try {
@@ -40,14 +43,28 @@ export const readCard = async (base64Image, api = API_URL) => {
       body: JSON.stringify({ image: base64Image })
     });
     const data = await response.json().catch(() => ({}));
-    if (response.status === 429) throw new Error('Zu viele Scans auf einmal. Bitte kurz warten.');
-    if (!response.ok) throw new Error(data.error || `Fehler beim Scannen (Status ${response.status}).`);
+    if (response.status === 429) { const e = new Error('Zu viele Scans auf einmal. Bitte kurz warten.'); e.final = true; throw e; }
+    if (response.status === 503) { const e = new Error('Der KI-Dienst ist gerade sehr gefragt. Bitte warte kurz und scanne erneut.'); e.busy = true; throw e; }
+    if (!response.ok) { const e = new Error(data.error || `Fehler beim Scannen (Status ${response.status}).`); e.final = true; throw e; }
     return data;
   } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Der Server hat nicht geantwortet (schläft evtl.). Bitte gleich nochmal versuchen.');
+    if (e.name === 'AbortError') { const t = new Error('Der Server hat nicht geantwortet (schläft evtl.). Bitte gleich nochmal versuchen.'); t.busy = true; throw t; }
+    if (e instanceof TypeError) { const t = new Error('Keine Verbindung zum Server. Internet prüfen und erneut versuchen.'); t.busy = true; throw t; }
     throw e;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+// Mit einer automatischen Wiederholung (nach 3 s) bei Überlastung/Netzfehler
+export const readCard = async (base64Image, api = API_URL, { retries = 1 } = {}) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readCardOnce(base64Image, api);
+    } catch (e) {
+      if (!e.busy || attempt >= retries) throw e;
+      await sleep(3000);
+    }
   }
 };
 
@@ -66,14 +83,23 @@ function shrinkToCanvas(source, w, h, maxSide = 1280) {
 // ==========================================
 export default function CardScanner({ mode = 'collection', onClose, onResult, onSearch, onPick, Img, owned, api = API_URL, series = false, onSeriesChange }) {
   const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [preview, setPreview] = useState('');
   const [scanned, setScanned] = useState(false);
   const [name, setName] = useState('');
   const [number, setNumber] = useState('');
+  const [meta, setMeta] = useState({ set: '', language: '' });
   const [cards, setCards] = useState([]);
   const [scores, setScores] = useState({});
   const canvasRef = useRef(null);
+  const dataUrlRef = useRef('');
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
 
   const rank = async (list) => {
     if (list.length > 1 && canvasRef.current) {
@@ -82,53 +108,70 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
     return { cards: list, scores: {} };
   };
 
-  const onFile = async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
+  // Analysiert das aktuelle Foto (auch für „Erneut versuchen“, ohne neu zu fotografieren)
+  const analyze = async (dataUrl) => {
     setBusy(true); setError(''); setScanned(false); setCards([]); setScores({});
+    setStatus('KI analysiert die Karte …');
     try {
-      const { source, w, h } = await loadImageSource(file);
-      const canvas = shrinkToCanvas(source, w, h);
-      canvasRef.current = canvas;
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-      setPreview(dataUrl);
-
       const data = await readCard(dataUrl, api);
+      if (!aliveRef.current) return;
       const ai = data.aiAnalysis || {};
       setName(ai.name || '');
       setNumber(ai.number || '');
+      setMeta({ set: ai.set || '', language: ai.language || '' });
 
       let list = Array.isArray(data.results) ? data.results : [];
       if (list.length === 0 && ai.name && onSearch) {
+        setStatus('Suche in der Datenbank …');
         try { list = await onSearch(buildQuery(ai.name, ai.number)); } catch (err) { /* unten: kein Treffer */ }
-        if (list.length === 0 && ai.number && onSearch) { try { list = await onSearch(ai.name); } catch (err) { /* egal */ } }
+        if (list.length === 0 && ai.number) { try { list = await onSearch(ai.name); } catch (err) { /* egal */ } }
       }
+      if (!aliveRef.current) return;
+      setStatus('Vergleiche Bilder …');
       const ranked = await rank(list);
+      if (!aliveRef.current) return;
       setCards(ranked.cards);
       setScores(ranked.scores);
       setScanned(true);
     } catch (err) {
-      setError(err.message || 'Scan fehlgeschlagen.');
+      if (aliveRef.current) setError(err.message || 'Scan fehlgeschlagen.');
     } finally {
-      setBusy(false);
+      if (aliveRef.current) { setBusy(false); setStatus(''); }
+    }
+  };
+
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || busy) return;
+    setError('');
+    try {
+      const { source, w, h } = await loadImageSource(file);
+      const canvas = shrinkToCanvas(source, w, h);
+      canvasRef.current = canvas;
+      dataUrlRef.current = canvas.toDataURL('image/jpeg', 0.85);
+      setPreview(dataUrlRef.current);
+      await analyze(dataUrlRef.current);
+    } catch (err) {
+      setError('Das Foto konnte nicht gelesen werden.');
     }
   };
 
   const research = async () => {
     if (!name.trim() || !onSearch || busy) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setStatus('Suche in der Datenbank …');
     try {
       let list = await onSearch(buildQuery(name, number));
       if (list.length === 0 && number) list = await onSearch(name.trim());
       const ranked = await rank(list);
+      if (!aliveRef.current) return;
       setCards(ranked.cards);
       setScores(ranked.scores);
       setScanned(true);
     } catch (err) {
-      setError(err.message || 'Suche fehlgeschlagen.');
+      if (aliveRef.current) setError(err.message || 'Suche fehlgeschlagen.');
     } finally {
-      setBusy(false);
+      if (aliveRef.current) { setBusy(false); setStatus(''); }
     }
   };
 
@@ -137,8 +180,11 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
     onResult({ query: buildQuery(name, number), name: name.trim(), number: String(number || '').trim() });
   };
 
+  const onEnter = (e) => { if (e.key === 'Enter') { e.preventDefault(); research(); } };
+
   const inputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none';
   const btnCls = 'block text-center cursor-pointer font-black py-3 rounded-xl text-sm transition-colors';
+  const disabled = busy ? 'opacity-50 pointer-events-none' : '';
 
   return (
     <div className="fixed inset-0 z-[80] bg-slate-950 flex flex-col text-slate-100">
@@ -154,11 +200,11 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
           </p>
 
           <div className="grid grid-cols-2 gap-2">
-            <label className={`${btnCls} bg-cyan-500 hover:bg-cyan-400 text-slate-950 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`${btnCls} bg-cyan-500 hover:bg-cyan-400 text-slate-950 ${disabled}`}>
               📷 Kamera
               <input type="file" accept="image/*" capture="environment" onChange={onFile} className="hidden" disabled={busy} />
             </label>
-            <label className={`${btnCls} bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+            <label className={`${btnCls} bg-slate-800 hover:bg-slate-700 text-cyan-300 border border-cyan-500/30 ${disabled}`}>
               🖼️ Aus Galerie
               <input type="file" accept="image/*" onChange={onFile} className="hidden" disabled={busy} />
             </label>
@@ -173,10 +219,18 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
 
           {busy && (
             <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 text-xs text-cyan-300 flex items-center gap-2">
-              <span className="animate-spin">⚡</span> KI analysiert die Karte … (der Server braucht nach Inaktivität evtl. bis zu einer Minute)
+              <span className="animate-spin">⚡</span> {status || 'Bitte warten …'} <span className="text-slate-500">(nach Inaktivität braucht der Server evtl. bis zu einer Minute)</span>
             </div>
           )}
-          {error && <p className="text-xs text-rose-400">{error}</p>}
+
+          {error && (
+            <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3 space-y-2">
+              <p className="text-xs text-rose-300">{error}</p>
+              {dataUrlRef.current && !busy && (
+                <button onClick={() => analyze(dataUrlRef.current)} className="text-[11px] font-black px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950">🔄 Erneut versuchen (gleiches Foto)</button>
+              )}
+            </div>
+          )}
 
           {preview && (
             <div className="flex gap-3 items-start">
@@ -184,8 +238,13 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
               {scanned && (
                 <div className="flex-1 space-y-2">
                   <p className="text-[10px] text-slate-400">Erkannt – bei Bedarf korrigieren:</p>
-                  <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={inputCls} />
-                  <input value={number} onChange={(e) => setNumber(e.target.value)} placeholder="Nummer, z. B. 44/102" className={inputCls} />
+                  <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={onEnter} placeholder="Name" className={inputCls} />
+                  <input value={number} onChange={(e) => setNumber(e.target.value)} onKeyDown={onEnter} placeholder="Nummer, z. B. 44/102" className={inputCls} />
+                  {(meta.set || meta.language) && (
+                    <p className="text-[10px] text-slate-500">
+                      {meta.language ? `Sprache: ${LANG_LABEL[meta.language] || meta.language}` : ''}{meta.language && meta.set ? ' · ' : ''}{meta.set ? `Set: ${meta.set}` : ''}
+                    </p>
+                  )}
                   <button onClick={research} disabled={busy || !name.trim()} className="text-[11px] font-bold text-cyan-400 hover:underline disabled:opacity-40">Neu suchen</button>
                 </div>
               )}
