@@ -437,113 +437,93 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
     return undefined;
   }, [phase]);
 
+  const normMatch = (value) => String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+  const cardNumber = (card) => {
+    const raw = card?.number != null ? String(card.number) : '';
+    const total = card?.set?.total != null ? String(card.set.total) : '';
+    return raw ? (total ? `${raw.padStart(3, '0')}/${total}` : raw) : '';
+  };
+
+  const nameSimilarity = (a, b) => {
+    const x = normMatch(a), y = normMatch(b);
+    if (!x || !y) return 0;
+    if (x === y) return 100;
+    if (x.includes(y) || y.includes(x)) return 82;
+    const m = Math.min(x.length, y.length);
+    let same = 0;
+    for (let i = 0; i < m; i++) if (x[i] === y[i]) same++;
+    return Math.round((same / Math.max(x.length, y.length)) * 70);
+  };
+
   const doSearch = async (n, num, alternatives = [], numberAlternatives = []) => {
-    const first = String(n || '').trim();
-    const candidates = [];
-    const addCandidate = (value) => {
-      const x = String(value || '').trim();
-      if (!x || x.length < 2) return;
-      if (!candidates.includes(x)) candidates.push(x);
-    };
-
-    addCandidate(first);
-    (alternatives || []).forEach(addCandidate);
-
-    // Auch einzelne Wörter versuchen: OCR liefert bei Glanz gerne z. B. "gaz Krebscorps".
-    candidates.slice().forEach((value) => {
-      value.split(/\s+/)
-        .filter((x) => x.length >= 3)
-        .sort((a, b) => b.length - a.length)
-        .slice(0, 4)
-        .forEach(addCandidate);
-    });
-
-    const nums = [];
-    const addNum = (value) => {
-      const x = String(value || '').trim();
-      if (x && !nums.includes(x)) nums.push(x);
-    };
-    addNum(num);
-    (numberAlternatives || []).forEach(addNum);
-    if (!candidates.length && nums.length) nums.slice(0, 6).forEach(addCandidate);
     if (!onSearch) { setResults([]); return; }
+    const names = [], nums = [];
+    const add = (arr, value, min = 2) => {
+      const x = String(value || '').trim();
+      if (x && x.length >= min && !arr.includes(x)) arr.push(x);
+    };
+    add(names, n);
+    (alternatives || []).forEach((x) => add(names, x));
+    names.slice().forEach((x) => x.split(/\s+/).filter(t => t.length >= 3).forEach(t => add(names, t)));
+    add(nums, num, 3);
+    (numberAlternatives || []).forEach((x) => add(nums, x, 3));
 
     setSearching(true); setError(''); setNote('');
     try {
-      const all = [];
-      const seen = new Set();
-      const queries = [];
+      const all = [], seen = new Set();
+      const addCards = (found) => {
+        if (!Array.isArray(found)) return;
+        for (const card of found) if (card?.id && !seen.has(card.id)) { seen.add(card.id); all.push(card); }
+      };
 
-      // NICHT beim ersten Treffer abbrechen. Ein falscher OCR-Kandidat wie "eee"
-      // kann sonst echte Treffer wie "Igelavar" verhindern.
-      for (const candidate of candidates.slice(0, 12)) {
-        const queriesForCandidate = nums.length
-          ? [...nums.slice(0, 8).map((x) => buildQuery(candidate, x)), candidate]
-          : [candidate];
-        for (const q of queriesForCandidate) {
-          queries.push(q);
-          try {
-            const found = await onSearch(q);
-            if (Array.isArray(found)) {
-              for (const card of found) {
-                if (card?.id && !seen.has(card.id)) {
-                  seen.add(card.id);
-                  all.push(card);
-                }
-              }
-            }
-          } catch (e) { /* nächsten Kandidaten trotzdem versuchen */ }
+      for (const candidate of nums.slice(0, 12)) {
+        try { addCards(await onSearch(candidate)); } catch (e) {}
+      }
+      for (const nameCandidate of names.slice(0, 16)) {
+        for (const numCandidate of nums.slice(0, 10)) {
+          try { addCards(await onSearch(buildQuery(nameCandidate, numCandidate))); } catch (e) {}
         }
+        try { addCards(await onSearch(nameCandidate)); } catch (e) {}
       }
 
-      // Wenn Name OCR komplett danebenliegt, Nummer separat suchen.
-      if (!all.length && nums.length) {
-        for (const numCandidate of nums.slice(0, 8)) {
-          try {
-            const found = await onSearch(String(numCandidate).trim());
-            if (Array.isArray(found)) {
-              for (const card of found) {
-                if (card?.id && !seen.has(card.id)) {
-                  seen.add(card.id);
-                  all.push(card);
-                }
-              }
-            }
-          } catch (e) { /* nächsten Nummernkandidaten versuchen */ }
+      const ranked = all.map((card) => {
+        const cn = cardNumber(card).replace(/\s/g, '');
+        let numberScore = 0;
+        for (const candidate of nums) {
+          const a = candidate.replace(/\s/g, '').replace(/^0+(?=\d)/, '');
+          const b = cn.replace(/^0+(?=\d)/, '');
+          if (a === b) numberScore = Math.max(numberScore, 1000);
+          else {
+            const [ai, at] = a.split('/'), [bi, bt] = b.split('/');
+            if (at && bt && at === bt && ai && bi) numberScore = Math.max(numberScore, 160);
+          }
         }
-      }
+        let nameScore = 0;
+        for (const candidate of names) nameScore = Math.max(nameScore, nameSimilarity(candidate, card.name));
+        return { card, score: numberScore + nameScore * 3 };
+      }).sort((a, b) => b.score - a.score);
 
-      let list = all;
+      const hasExactNumber = ranked.some((x) => x.score >= 1000);
+      let list = hasExactNumber ? ranked.filter((x) => x.score >= 1000).map((x) => x.card) : ranked.map((x) => x.card);
+
       if (list.length > 1 && canvasRef.current && api) {
         try {
           const r = await rankByImage(canvasRef.current, list, api);
           list = r.cards;
           if (aliveRef.current) setScores(r.scores);
-        } catch (e) { /* ohne Bildvergleich weiter */ }
+        } catch (e) {}
       }
 
       if (aliveRef.current) {
-        const limited = list.slice(0, 24);
-        setResults(limited);
-        if (limited.length) {
-          const best = limited[0];
-          if (best?.name) setName(String(best.name).replace(/\s*\[.*\]\s*$/, ''));
-          if (best?.number) setNumber(String(best.number) + (best?.set?.total ? `/${best.set.total}` : ''));
-          if (queries.length > 1) {
-            setNote('Mehrere OCR-Kandidaten wurden geprüft und nach dem Kartenbild bewertet.');
-          }
-        }
+        setResults(list.slice(0, 24));
+        if (!list.length) setNote('Keine Karte eindeutig gefunden. Bitte nochmal mit scharfem, reflexionsfreiem Foto scannen.');
+        else if (hasExactNumber) setNote('Exakte Kartennummer hat Vorrang vor OCR-Name und Bildähnlichkeit.');
+        else setNote('Mehrere OCR-Namen und Nummern wurden gegen die Kartendaten geprüft.');
       }
     } catch (e) {
-      if (aliveRef.current) {
-        setResults(null);
-        setError(e && e.name === 'AbortError'
-          ? 'Der Server hat zu lange nicht geantwortet (Render schläft evtl.). Gleich nochmal „Suchen“ tippen.'
-          : 'Suche fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
-      }
-    } finally {
-      if (aliveRef.current) setSearching(false);
-    }
+      if (aliveRef.current) { setResults(null); setError('Suche fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler')); }
+    } finally { if (aliveRef.current) setSearching(false); }
   };
 
   const runOcr = async (card) => {
