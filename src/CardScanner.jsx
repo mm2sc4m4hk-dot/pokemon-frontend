@@ -128,20 +128,79 @@ function nameCandidatesFromOcr(raw) {
   return out.slice(0, 8);
 }
 
+
+function normalizeNumberOcr(raw) {
+  return String(raw || '')
+    .normalize('NFKC')
+    .replace(/[Oo]/g, '0')
+    .replace(/[Il|]/g, '1')
+    .replace(/[Ss]/g, '5')
+    .replace(/[Bb]/g, '8')
+    .replace(/[Gg]/g, '6');
+}
+
+function extractCardNumbers(raw) {
+  const text = normalizeNumberOcr(raw)
+    .replace(/[—–−]/g, '-')
+    .replace(/[\\]/g, '/');
+  const out = [];
+  const add = (a, b) => {
+    const aa = String(a || '').replace(/\D/g, '');
+    const bb = String(b || '').replace(/\D/g, '');
+    if (!aa || !bb || aa.length > 4 || bb.length > 4) return;
+    const value = `${aa.padStart(3, '0')}/${bb}`;
+    if (!out.includes(value)) out.push(value);
+  };
+
+  // Normalfall: 024/189, 44/102, 195/198 usw.
+  for (const m of text.matchAll(/(?:^|[^0-9])([0-9]{1,4})\s*[/\-]\s*([0-9]{1,4})(?:[^0-9]|$)/g)) add(m[1], m[2]);
+  // OCR setzt gelegentlich Leerzeichen: 024 / 189 oder 024 189.
+  for (const m of text.matchAll(/(?:^|[^0-9])([0-9]{1,4})\s+([0-9]{1,4})(?:[^0-9]|$)/g)) add(m[1], m[2]);
+  // Häufige TCG-Schreibweise mit Set-Präfix: SV044/198, TG05/30 etc.
+  for (const m of text.matchAll(/(?:[A-Z]{1,4}\s*)?([0-9]{1,4})\s*[/\-]\s*([0-9]{1,4})/gi)) add(m[1], m[2]);
+  return out;
+}
+
+function scoreNameCandidate(candidate, confidence, occurrences) {
+  const x = normalizeOcrLine(candidate);
+  if (!x) return -Infinity;
+  const letters = (x.match(/[\p{L}]/gu) || []).length;
+  const digits = (x.match(/\d/g) || []).length;
+  const words = x.split(/\s+/).filter(Boolean);
+  let score = Number(confidence) || 0;
+  score += Math.min(18, (occurrences || 1) * 4);
+  score += Math.min(12, Math.max(0, letters - 3));
+  if (words.length === 1) score += 12;
+  if (words.length === 2) score += 4;
+  if (words.length > 3) score -= 25;
+  if (digits) score -= 20;
+  if (/^(phase|stufe|basis|basic|stage|hp|kp)$/i.test(x)) score -= 40;
+  if (/^[^\p{L}]*$/u.test(x)) score -= 50;
+  if (/[\[\]{}()|=+*_<>]/.test(x)) score -= 18;
+  if (x.length > 28) score -= 18;
+  return score;
+}
+
 export async function readCard(worker, card) {
   const cw = card.width, ch = card.height;
 
   // Pokémon-Kartennamen sitzen etwas unterhalb der oberen Kante. Wir lesen bewusst
   // mehrere Varianten und wählen später nicht einfach den ERSTEN OCR-Treffer.
   const nameBoxes = [
-    [0.015 * cw, 0.010 * ch, 0.97 * cw, 0.17 * ch],
-    [0.035 * cw, 0.020 * ch, 0.90 * cw, 0.12 * ch],
-    [0.02 * cw, 0.035 * ch, 0.96 * cw, 0.11 * ch]
+    // Der eigentliche Pokémon-Name steht links/zentral oben. Phase/Stufe und HP
+    // liegen daneben und sollen nicht als Name in die Suche gelangen.
+    [0.10 * cw, 0.030 * ch, 0.68 * cw, 0.105 * ch],
+    [0.06 * cw, 0.020 * ch, 0.80 * cw, 0.125 * ch],
+    [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.145 * ch],
+    [0.08 * cw, 0.045 * ch, 0.72 * cw, 0.085 * ch]
   ];
   const numBoxes = [
-    [0.01 * cw, 0.84 * ch, 0.98 * cw, 0.16 * ch],
-    [0.02 * cw, 0.88 * ch, 0.96 * cw, 0.10 * ch],
-    [0.02 * cw, 0.80 * ch, 0.96 * cw, 0.20 * ch]
+    // Nummer unten separat und mehrfach lesen; die lange Box fängt verschiedene
+    // Kartenlayouts ab, die schmalen Boxen reduzieren Regeltext/Schwäche als OCR.
+    [0.55 * cw, 0.875 * ch, 0.43 * cw, 0.105 * ch],
+    [0.45 * cw, 0.845 * ch, 0.53 * cw, 0.145 * ch],
+    [0.65 * cw, 0.905 * ch, 0.33 * cw, 0.075 * ch],
+    [0.01 * cw, 0.84 * ch, 0.98 * cw, 0.16 * ch]
   ];
 
   const nameRuns = [];
@@ -169,13 +228,24 @@ export async function readCard(worker, card) {
     }
   }
 
-  // Kandidaten nach OCR-Confidence sortieren, aber ALLE Kandidaten behalten.
-  // So wird ein einzelnes falsches "eee" nicht automatisch zum Namen.
-  const nameCandidates = [...new Map(
-    nameRuns
-      .sort((a, b) => b.confidence - a.confidence)
-      .map((x) => [x.candidate, x])
-  ).values()].slice(0, 24).map((x) => x.candidate);
+  // OCR kann bei Pokémon-Namen kurze Mülltreffer mit hoher Confidence liefern
+  // (z. B. "eee" oder "PHASE ] var"). Kandidaten werden deshalb zusammengeführt,
+  // Wiederholungen belohnt und typische UI-/Phasenfragmente abgewertet.
+  const nameMap = new Map();
+  for (const run of nameRuns) {
+    const key = normalizeOcrLine(run.candidate).toLocaleLowerCase();
+    if (!key) continue;
+    const prev = nameMap.get(key);
+    nameMap.set(key, {
+      candidate: prev?.candidate || run.candidate,
+      confidence: Math.max(prev?.confidence || 0, run.confidence || 0),
+      occurrences: (prev?.occurrences || 0) + 1
+    });
+  }
+  const rankedNames = [...nameMap.values()]
+    .map((x) => ({ ...x, score: scoreNameCandidate(x.candidate, x.confidence, x.occurrences) }))
+    .sort((a, b) => b.score - a.score);
+  const nameCandidates = rankedNames.slice(0, 24).map((x) => x.candidate);
   const name = nameCandidates[0] || '';
 
   // Nummer separat mit mehreren Ausschnitten lesen. Wichtig: nicht die erste OCR-
@@ -197,15 +267,24 @@ export async function readCard(worker, card) {
       const q = prepare(card, ...box, 1800, invert, threshold);
       const r = await worker.recognize(q.canvas);
       const raw = r?.data?.text || '';
-      const parsed = parseNumber(raw);
+      const parsedList = extractCardNumbers(raw);
       const confidence = Number(r?.data?.confidence) || 0;
-      if (parsed) numberRuns.push({ parsed, confidence });
-      if (!numThumb && parsed) numThumb = q.canvas;
+      for (const parsed of parsedList) numberRuns.push({ parsed, confidence });
+      if (!numThumb && parsedList.length) numThumb = q.canvas;
     }
   }
 
-  const number = numberRuns
-    .sort((a, b) => b.confidence - a.confidence)[0]?.parsed || '';
+  const numberMap = new Map();
+  for (const run of numberRuns) {
+    const prev = numberMap.get(run.parsed);
+    numberMap.set(run.parsed, {
+      parsed: run.parsed,
+      confidence: Math.max(prev?.confidence || 0, run.confidence || 0),
+      occurrences: (prev?.occurrences || 0) + 1
+    });
+  }
+  const number = [...numberMap.values()]
+    .sort((a, b) => (b.confidence + b.occurrences * 12) - (a.confidence + a.occurrences * 12))[0]?.parsed || '';
 
   const thumb = (c) => {
     try { return c ? c.toDataURL('image/jpeg', 0.6) : ''; }
