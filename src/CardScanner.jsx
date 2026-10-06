@@ -22,40 +22,50 @@ import { rankByImage } from './imageMatch';
 // -----------------------------------------------------------------------------
 // OCR worker
 // -----------------------------------------------------------------------------
-let workerPromise = null;
+const workerPromises = new Map();
 let idleTimer = null;
 
-export function getWorker(onStatus) {
+const OCR_LANGS = {
+  latin: 'deu+eng',
+  japanese: 'jpn',
+  korean: 'kor',
+  chineseSimplified: 'chi_sim',
+  chineseTraditional: 'chi_tra'
+};
+
+export function getWorker(kind = 'latin', onStatus) {
   if (idleTimer) {
     clearTimeout(idleTimer);
     idleTimer = null;
   }
 
-  if (!workerPromise) {
-    workerPromise = import('tesseract.js')
-      .then(({ createWorker }) => createWorker('deu+eng+jpn+kor+chi_sim+chi_tra', 1, {
+  const lang = OCR_LANGS[kind] || OCR_LANGS.latin;
+  if (!workerPromises.has(kind)) {
+    const promise = import('tesseract.js')
+      .then(({ createWorker }) => createWorker(lang, 1, {
         logger: (m) => {
           if (onStatus && m && typeof m.progress === 'number' && /load|init/i.test(m.status || '')) {
-            onStatus(`Lade Texterkennung … ${Math.round(m.progress * 100)} %`);
+            onStatus(`Lade ${lang} Texterkennung … ${Math.round(m.progress * 100)} %`);
           }
         }
       }))
       .catch((e) => {
-        workerPromise = null;
+        workerPromises.delete(kind);
         throw e;
       });
+    workerPromises.set(kind, promise);
   }
 
-  return workerPromise;
+  return workerPromises.get(kind);
 }
 
 export function releaseWorkerLater() {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    const p = workerPromise;
-    workerPromise = null;
+    const all = [...workerPromises.entries()];
+    workerPromises.clear();
     idleTimer = null;
-    if (p) p.then((w) => w.terminate()).catch(() => {});
+    all.forEach(([, p]) => p.then((w) => w.terminate()).catch(() => {}));
   }, 60000);
 }
 
@@ -295,41 +305,77 @@ function extractNumberCandidates(raw) {
 // -----------------------------------------------------------------------------
 // OCR pipeline
 // -----------------------------------------------------------------------------
-export async function readCard(worker, card, onStatus) {
+export async function readCard(card, onStatus) {
   const cw = card.width;
   const ch = card.height;
-  const nameBox = [0.015 * cw, 0.008 * ch, 0.97 * cw, 0.155 * ch];
+  // Der Name sitzt bei modernen Pokémon-Karten sehr weit oben. Wir lassen bewusst
+  // etwas Rand stehen, schneiden HP/KP aber möglichst aus dem OCR-Fenster heraus.
+  const nameBox = [0.02 * cw, 0.012 * ch, 0.78 * cw, 0.115 * ch];
   const numBox = [0.005 * cw, 0.855 * ch, 0.99 * cw, 0.145 * ch];
 
   const names = new Map();
   let nameThumb = null;
-  const nameModes = ['color', 'auto', 'normal', 'invert', 'threshold'];
+  const nameModes = ['color', 'auto', 'normal', 'threshold'];
 
+  // 1) Lateinische Namen separat lesen. Das verhindert, dass CJK-Modelle aus
+  // einem klaren "Igelavar" plötzlich る / 개 / 세 machen.
+  const latinWorker = await getWorker('latin', onStatus);
+  const latinWhitelist = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÄÖÜäöüÀÁÂÃÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝßÆŒ -';
   for (let i = 0; i < nameModes.length; i += 1) {
-    if (onStatus) onStatus(`Lese Kartenname … ${i + 1}/${nameModes.length}`);
-    const p = prepare(card, ...nameBox, 1400, nameModes[i]);
+    if (onStatus) onStatus(`Lese lateinischen Kartennamen … ${i + 1}/${nameModes.length}`);
+    const p = prepare(card, ...nameBox, 1600, nameModes[i]);
     for (const psm of [7, 13]) {
-      await worker.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: String(psm) });
-      const result = await worker.recognize(p.canvas);
+      await latinWorker.setParameters({ tessedit_char_whitelist: latinWhitelist, tessedit_pageseg_mode: String(psm) });
+      const result = await latinWorker.recognize(p.canvas);
       extractNameCandidates(result?.data?.text || '', result?.data, names);
       if (!nameThumb && (result?.data?.text || '').trim()) nameThumb = p.canvas;
     }
   }
 
+  // 2) CJK separat lesen. Diese Kandidaten werden nur ergänzt; sie dürfen die
+  // lateinische Erkennung nicht durch zufällige Zeichen verdrängen.
+  const cjkKinds = ['japanese', 'korean', 'chineseSimplified', 'chineseTraditional'];
+  for (const kind of cjkKinds) {
+    const cjkWorker = await getWorker(kind, onStatus);
+    if (onStatus) onStatus(`Prüfe ${OCR_LANGS[kind]} Kartennamen …`);
+    const p = prepare(card, ...nameBox, 1600, 'color');
+    await cjkWorker.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: '7' });
+    const result = await cjkWorker.recognize(p.canvas);
+    const text = result?.data?.text || '';
+    // CJK-Kandidaten bekommen bewusst etwas weniger Gewicht. Bei einer
+    // tatsächlich japanischen/koreanischen/chinesischen Karte bleiben sie aber
+    // verfügbar und können über die API-Suche gewinnen.
+    const before = new Set(names.keys());
+    extractNameCandidates(text, result?.data, names);
+    names.forEach((entry, key) => {
+      if (!before.has(key) && entry.sources.includes('line')) {
+        entry.confidence *= 0.82;
+      }
+    });
+  }
+
   const nameCandidates = [...names.values()]
-    .sort((a, b) => (b.hits * 30 + b.confidence) - (a.hits * 30 + a.confidence))
+    .sort((a, b) => {
+      const aCjk = hasCjk(a.value);
+      const bCjk = hasCjk(b.value);
+      const aScore = a.hits * 30 + a.confidence + (aCjk ? 0 : 18);
+      const bScore = b.hits * 30 + b.confidence + (bCjk ? 0 : 18);
+      return bScore - aScore;
+    })
     .slice(0, 12);
 
+  // Nummer weiterhin komplett unabhängig vom Namens-OCR.
   const numbers = new Map();
   let numThumb = null;
   const numberModes = ['auto', 'normal', 'invert', 'threshold'];
+  const numberWorker = await getWorker('latin', onStatus);
   const whitelist = '0123456789/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-';
 
   for (let i = 0; i < numberModes.length; i += 1) {
     if (onStatus) onStatus(`Lese Kartennummer … ${i + 1}/${numberModes.length}`);
     const p = prepare(card, ...numBox, 1700, numberModes[i]);
-    await worker.setParameters({ tessedit_char_whitelist: whitelist, tessedit_pageseg_mode: '11' });
-    const result = await worker.recognize(p.canvas);
+    await numberWorker.setParameters({ tessedit_char_whitelist: whitelist, tessedit_pageseg_mode: '11' });
+    const result = await numberWorker.recognize(p.canvas);
     const parsed = extractNumberCandidates(result?.data?.text || '');
     parsed.forEach((item) => {
       const old = numbers.get(item.value);
@@ -643,9 +689,8 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
     setStatus('Lade Texterkennung …');
 
     try {
-      const worker = await getWorker((s) => aliveRef.current && setStatus(s));
       if (!aliveRef.current) return;
-      const read = await readCard(worker, card, (s) => aliveRef.current && setStatus(s));
+      const read = await readCard(card, (s) => aliveRef.current && setStatus(s));
       if (!aliveRef.current) return;
 
       lastOcrRef.current = read;
