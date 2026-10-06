@@ -26,6 +26,19 @@ const pad = (n) => String(n).padStart(3, '0');
 const plain = (name) => String(name || '').replace(/\s*\[.*\]\s*$/, '');
 const spriteUrl = (id) => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
 
+// Filtertext -> mehrere mögliche Schreibweisen (deutsch/englisch)
+function makeMatcher(query) {
+  const t = String(query || '').trim().toLowerCase();
+  if (!t) return () => true;
+  const alts = [t];
+  if (/^30\s*(jahre|j\b|th)/.test(t)) alts.push('30th', '30 jahre', 'anniversary');
+  if (/^25\s*(jahre|j\b|th)|^celebrations/.test(t)) alts.push('25th', '25 jahre', 'celebrations');
+  return (txt) => {
+    const s = String(txt || '').toLowerCase();
+    return alts.some((a) => s.includes(a));
+  };
+}
+
 // Generationen: [Nummer, erste Dex-Nr., letzte Dex-Nr.]
 const GENS = [[1, 1, 151], [2, 152, 251], [3, 252, 386], [4, 387, 493], [5, 494, 649], [6, 650, 721], [7, 722, 809], [8, 810, 905], [9, 906, 1025]];
 // Binder-Seitenformate: [Label, Reihen, Spalten]
@@ -420,8 +433,8 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
 
   const all = res.data?.cards || [];
   const dexCardIds = new Set(all.map((c) => c.id));
-  const t = filterQ.trim().toLowerCase();
-  const match = (txt) => !t || txt.toLowerCase().includes(t);
+  const match = makeMatcher(filterQ);
+
 
   const mine = [];
   const seen = new Set();

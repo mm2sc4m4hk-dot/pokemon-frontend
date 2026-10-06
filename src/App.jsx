@@ -1784,6 +1784,15 @@ useEffect(() => {
               📷 Einzelne Karte scannen &amp; hinzufügen
             </button>
 
+
+{/* NEU: ganze Binder-Seite */}
+<button
+  onClick={() => setBatchOpen(true)}
+  className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md flex items-center justify-center gap-2"
+>
+  🗂️ Ganze Binder-Seite fotografieren &amp; hinzufügen
+</button>
+
 {/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
             <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 shadow-lg">
               <div className="flex justify-between items-center">
