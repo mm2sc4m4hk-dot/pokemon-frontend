@@ -174,12 +174,31 @@ function scoreNameCandidate(candidate, confidence, occurrences) {
   if (words.length === 2) score += 4;
   if (words.length > 3) score -= 25;
   if (digits) score -= 20;
-  if (/^(phase|stufe|basis|basic|stage|hp|kp)$/i.test(x)) score -= 40;
+  // Typische Nicht-Namen, die bei Pokémon-Karten direkt unter/bei dem Namen stehen.
+  if (/^(phase|stufe|basis|basic|stage|hp|kp)$/i.test(x)) score -= 50;
+  if (/^(entwickelt|entwickelt\s+sich|aus|evolves|evolves\s+from|from|phase|stufe|basic|stage)$/i.test(x)) score -= 65;
+  if (/entwickel|evolv|schwäche|resistenz|rückzug|retreat|weakness|resistance/i.test(x)) score -= 55;
   if (/^[^\p{L}]*$/u.test(x)) score -= 50;
-  if (/[\[\]{}()|=+*_<>]/.test(x)) score -= 18;
-  if (x.length > 28) score -= 18;
+  if (/[\[\]{}()|=+*_<>/\\]/.test(x)) score -= 45;
+  if (/[^\p{L}\p{N}\s'’-]/u.test(x)) score -= 12;
+  if (x.length > 28) score -= 25;
   return score;
 }
+
+function scoreCardNumber(parsed, confidence, occurrences, boxIndex) {
+  let score = Number(confidence) || 0;
+  score += Math.min(36, (occurrences || 1) * 9);
+  // Die erste Box ist der gezielte Nummernbereich; spätere Boxen sind nur Fallbacks.
+  score += Math.max(0, 18 - (boxIndex || 0) * 6);
+  const m = String(parsed || '').match(/^(\d{3})\/(\d{1,4})$/);
+  if (!m) return -Infinity;
+  const a = Number(m[1]);
+  const b = Number(m[2]);
+  if (!b || a > b) score -= 35;
+  if (b < 10) score -= 10;
+  return score;
+}
+
 
 export async function readCard(worker, card) {
   const cw = card.width, ch = card.height;
@@ -187,12 +206,12 @@ export async function readCard(worker, card) {
   // Pokémon-Kartennamen sitzen etwas unterhalb der oberen Kante. Wir lesen bewusst
   // mehrere Varianten und wählen später nicht einfach den ERSTEN OCR-Treffer.
   const nameBoxes = [
-    // Der eigentliche Pokémon-Name steht links/zentral oben. Phase/Stufe und HP
-    // liegen daneben und sollen nicht als Name in die Suche gelangen.
-    [0.10 * cw, 0.030 * ch, 0.68 * cw, 0.105 * ch],
-    [0.06 * cw, 0.020 * ch, 0.80 * cw, 0.125 * ch],
-    [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.145 * ch],
-    [0.08 * cw, 0.045 * ch, 0.72 * cw, 0.085 * ch]
+    // Zuerst sehr eng um die eigentliche Namenszeile lesen. Die Beschreibung
+    // darunter darf nicht als Name gewinnen (z. B. "Entwickelt sich ...").
+    [0.13 * cw, 0.025 * ch, 0.68 * cw, 0.070 * ch],
+    [0.08 * cw, 0.020 * ch, 0.78 * cw, 0.085 * ch],
+    [0.04 * cw, 0.015 * ch, 0.90 * cw, 0.105 * ch],
+    [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.135 * ch]
   ];
   const numBoxes = [
     // Nummer unten separat und mehrfach lesen; die lange Box fängt verschiedene
@@ -239,7 +258,8 @@ export async function readCard(worker, card) {
     nameMap.set(key, {
       candidate: prev?.candidate || run.candidate,
       confidence: Math.max(prev?.confidence || 0, run.confidence || 0),
-      occurrences: (prev?.occurrences || 0) + 1
+      occurrences: (prev?.occurrences || 0) + 1,
+      boxIndex: Math.min(prev?.boxIndex ?? 99, run.boxIndex ?? 99)
     });
   }
   const rankedNames = [...nameMap.values()]
@@ -257,19 +277,25 @@ export async function readCard(worker, card) {
 
   const numberRuns = [];
   let numThumb = null;
-  for (const box of numBoxes) {
-    for (const [invert, threshold] of [
-      ['auto', false],
-      [false, false],
-      [true, false],
-      ['auto', true]
+  for (let boxIndex = 0; boxIndex < numBoxes.length; boxIndex++) {
+    const box = numBoxes[boxIndex];
+    for (const [invert, threshold, psm] of [
+      ['auto', false, 7],
+      [false, false, 7],
+      [true, false, 7],
+      ['auto', true, 7],
+      ['auto', false, 13]
     ]) {
-      const q = prepare(card, ...box, 1800, invert, threshold);
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.-',
+        tessedit_pageseg_mode: String(psm)
+      });
+      const q = prepare(card, ...box, 2000, invert, threshold);
       const r = await worker.recognize(q.canvas);
       const raw = r?.data?.text || '';
       const parsedList = extractCardNumbers(raw);
       const confidence = Number(r?.data?.confidence) || 0;
-      for (const parsed of parsedList) numberRuns.push({ parsed, confidence });
+      for (const parsed of parsedList) numberRuns.push({ parsed, confidence, boxIndex });
       if (!numThumb && parsedList.length) numThumb = q.canvas;
     }
   }
@@ -280,11 +306,13 @@ export async function readCard(worker, card) {
     numberMap.set(run.parsed, {
       parsed: run.parsed,
       confidence: Math.max(prev?.confidence || 0, run.confidence || 0),
-      occurrences: (prev?.occurrences || 0) + 1
+      occurrences: (prev?.occurrences || 0) + 1,
+      boxIndex: Math.min(prev?.boxIndex ?? 99, run.boxIndex ?? 99)
     });
   }
   const number = [...numberMap.values()]
-    .sort((a, b) => (b.confidence + b.occurrences * 12) - (a.confidence + a.occurrences * 12))[0]?.parsed || '';
+    .map((x) => ({ ...x, score: scoreCardNumber(x.parsed, x.confidence, x.occurrences, x.boxIndex) }))
+    .sort((a, b) => b.score - a.score)[0]?.parsed || '';
 
   const thumb = (c) => {
     try { return c ? c.toDataURL('image/jpeg', 0.6) : ''; }
@@ -414,19 +442,23 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       // NICHT beim ersten Treffer abbrechen. Ein falscher OCR-Kandidat wie "eee"
       // kann sonst echte Treffer wie "Igelavar" verhindern.
       for (const candidate of candidates.slice(0, 12)) {
-        const q = num ? buildQuery(candidate, num) : candidate;
-        queries.push(q);
-        try {
-          const found = await onSearch(q);
-          if (Array.isArray(found)) {
-            for (const card of found) {
-              if (card?.id && !seen.has(card.id)) {
-                seen.add(card.id);
-                all.push(card);
+        const queriesForCandidate = num
+          ? [buildQuery(candidate, num), candidate]
+          : [candidate];
+        for (const q of queriesForCandidate) {
+          queries.push(q);
+          try {
+            const found = await onSearch(q);
+            if (Array.isArray(found)) {
+              for (const card of found) {
+                if (card?.id && !seen.has(card.id)) {
+                  seen.add(card.id);
+                  all.push(card);
+                }
               }
             }
-          }
-        } catch (e) { /* nächsten Kandidaten trotzdem versuchen */ }
+          } catch (e) { /* nächsten Kandidaten trotzdem versuchen */ }
+        }
       }
 
       // Wenn Name OCR komplett danebenliegt, Nummer separat suchen.
