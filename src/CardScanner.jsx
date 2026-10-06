@@ -524,26 +524,25 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
         }
         let nameScore = 0;
         for (const candidate of names) nameScore = Math.max(nameScore, nameSimilarity(candidate, card.name));
-        return { card, score: numberScore + nameScore * 3 };
+        // Nummer ist wichtig, darf aber einen klaren Namens-Treffer nicht
+        // überstimmen. Genau das passiert bei OCR-Fehlern wie 004/30 statt
+        // 024/189: der Name "Mgelavar" ist trotzdem sehr nah an "Igelavar".
+        return { card, nameScore, score: numberScore + nameScore * 8 };
       }).sort((a, b) => b.score - a.score);
 
-      const hasExactNumber = ranked.some((x) => x.score >= 1000);
-      const strongName = ranked.some((x) => {
-        const best = names.reduce((m, candidate) => Math.max(m, nameSimilarity(candidate, x.card.name)), 0);
-        return best >= 70;
-      });
+      const hasExactNumber = ranked.some((x) => x.score >= 500);
+      const strongName = ranked.some((x) => x.nameScore >= 65);
 
-      // Ein OCR-Nummerntreffer allein reicht nicht mehr. Wenn die Nummer nicht
-      // exakt in der Datenbank existiert und der Name gleichzeitig nur Müll ist,
-      // zeigen wir lieber KEINE falsche Karte.
+      // Nie mehr blind nach einer einzelnen, plausiblen OCR-Nummer filtern.
+      // Ein falsches 004/30 darf einen guten Namens-Treffer wie Igelavar nicht
+      // verdrängen. Exakte Nummer + guter Name ist dagegen weiterhin klar vorne.
       let list;
-      if (hasExactNumber) {
-        list = ranked.filter((x) => x.score >= 1000).map((x) => x.card);
-      } else if (strongName) {
-        list = ranked.filter((x) => {
-          const best = names.reduce((m, candidate) => Math.max(m, nameSimilarity(candidate, x.card.name)), 0);
-          return best >= 45;
-        }).map((x) => x.card);
+      if (strongName) {
+        list = ranked
+          .filter((x) => x.nameScore >= 45 || x.score >= 500)
+          .map((x) => x.card);
+      } else if (hasExactNumber) {
+        list = ranked.filter((x) => x.score >= 500).map((x) => x.card);
       } else {
         list = [];
       }
@@ -559,7 +558,7 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       if (aliveRef.current) {
         setResults(list.slice(0, 24));
         if (!list.length) setNote('Keine Karte eindeutig gefunden. Bitte nochmal mit scharfem, reflexionsfreiem Foto scannen.');
-        else if (hasExactNumber) setNote('Exakte Kartennummer hat Vorrang vor OCR-Name und Bildähnlichkeit.');
+        else if (hasExactNumber) setNote('Kartennummer wurde erkannt, aber mit dem Namen gegengeprüft.');
         else if (strongName) setNote('Kein sicherer Nummerntreffer – die Karte wurde über mehrere Namenskandidaten geprüft.');
         else setNote('OCR war nicht eindeutig. Es wurde bewusst keine zufällige Karte vorgeschlagen.');
       }
