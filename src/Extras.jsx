@@ -435,10 +435,13 @@ export function ArtistView({ api, collection, watchIds, onWish, onAddColl, Img, 
 // Detailfenster zu einem Pokémon: Karten aus der Collection + Karten zum Kaufen.
 // Wird vom Pokédex und vom Pokédex-Binder genutzt (onPick = Karte in Slot legen).
 // ---------------------------------------------------------------------
-function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl, Img, onClose, onPick, currentId, onClear, photoUi }) {
+function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl, Img, onClose, onPick, currentId, onClear, photoUi, onCustom, customBusy }) {
   const res = useJson(api, `/api/dex/${dex.id}`);
   const [filterQ, setFilterQ] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [customMode, setCustomMode] = useState(false);
+  const [cName, setCName] = useState('');
+  const [cFile, setCFile] = useState(null);
   const [extra, setExtra] = useState({ loading: true, cards: [] });
  
   // Lädt sofort beim Öffnen automatisch ALLE Karten per Namenssuche nach
@@ -501,6 +504,39 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
         <button onClick={onClear} className="w-full text-xs font-bold text-rose-300 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 rounded-lg py-2">Slot leeren</button>
       )}
       <SlotPhoto ui={photoUi} />
+      {onCustom && (
+        <button
+          onClick={() => setCustomMode((v) => !v)}
+          className={`w-full text-xs font-bold py-2 rounded-lg border ${customMode ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30 hover:bg-cyan-500/20'}`}
+        >
+          📷 Eigene Karte {customMode ? 'schließen' : 'hinzufügen'}
+        </button>
+      )}
+      {customMode && onCustom && (
+        <div className="space-y-3 rounded-xl border border-cyan-500/20 bg-slate-950/60 p-3">
+          <p className="text-[11px] text-slate-400">
+            Für dieses Pokémon eine Karte eintragen, die in der Datenbank nicht gefunden wird.
+            Sie erscheint im Pokédex-Binder ausgegraut als „fehlt 📷“.
+          </p>
+          <input
+            value={cName}
+            onChange={(e) => setCName(e.target.value)}
+            placeholder="Kartenname"
+            className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
+          />
+          <label className="block cursor-pointer text-center text-xs font-bold py-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500 hover:text-slate-950">
+            {cFile ? `📷 ${cFile.name}` : '📷 Foto auswählen'}
+            <input type="file" accept="image/*" className="hidden" onChange={(e) => { setCFile(e.target.files?.[0] || null); e.target.value = ''; }} />
+          </label>
+          <button
+            disabled={!cName.trim() || !cFile || customBusy}
+            onClick={() => onCustom(cName.trim(), cFile)}
+            className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-slate-950 font-black text-xs py-2.5 rounded-lg"
+          >
+            {customBusy ? 'Speichere …' : 'In den Slot legen'}
+          </button>
+        </div>
+      )}
       <input value={filterQ} onChange={(e) => setFilterQ(e.target.value)} placeholder="Filtern nach Set oder Name …" className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
  
       {isLoading && <Loading text="Lade alle Karten …" />}
@@ -1539,6 +1575,7 @@ export function BinderView({ api, collection, watchIds, onWish, onAddColl, onOpe
           collection={collection} ownedIds={ownedIds} watchIds={watchIds} onWish={onWish} Img={Img}
           onClose={() => setSlotIdx(null)} onPick={(card) => assign(slotIdx, card)}
           currentId={current?.id} onClear={() => clearSlot(slotIdx)} photoUi={photoUi}
+          onCustom={(name, file) => saveCustomSlot(slotIdx, name, file)} customBusy={photoBusy}
         />
       ) : (
         <CardPicker
