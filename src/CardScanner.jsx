@@ -148,6 +148,11 @@ function extractCardNumbers(raw) {
     const aa = String(a || '').replace(/\D/g, '');
     const bb = String(b || '').replace(/\D/g, '');
     if (!aa || !bb || aa.length > 4 || bb.length > 4) return;
+    // Eine gültige TCG-Nummer hat praktisch immer einen sinnvollen Gesamtwert.
+    // OCR-Treffer wie "002/0" oder "008/5" sind fast immer Regeltext-Müll.
+    const total = Number(bb);
+    const index = Number(aa);
+    if (!Number.isFinite(total) || !Number.isFinite(index) || total < 10 || index > total) return;
     const value = `${aa.padStart(3, '0')}/${bb}`;
     if (!out.includes(value)) out.push(value);
   };
@@ -214,12 +219,14 @@ export async function readCard(worker, card) {
     [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.135 * ch]
   ];
   const numBoxes = [
-    // Nummer unten separat und mehrfach lesen; die lange Box fängt verschiedene
-    // Kartenlayouts ab, die schmalen Boxen reduzieren Regeltext/Schwäche als OCR.
-    [0.55 * cw, 0.875 * ch, 0.43 * cw, 0.105 * ch],
-    [0.45 * cw, 0.845 * ch, 0.53 * cw, 0.145 * ch],
-    [0.65 * cw, 0.905 * ch, 0.33 * cw, 0.075 * ch],
-    [0.01 * cw, 0.84 * ch, 0.98 * cw, 0.16 * ch]
+    // Pokémon-Kartennummern stehen bei den normalen Karten unten LINKS
+    // (z. B. 024/189). Die bisherigen Boxen lagen überwiegend rechts und
+    // haben deshalb oft Regeltext statt der Nummer gelesen.
+    [0.02 * cw, 0.875 * ch, 0.42 * cw, 0.105 * ch],
+    [0.00 * cw, 0.835 * ch, 0.58 * cw, 0.145 * ch],
+    [0.06 * cw, 0.905 * ch, 0.40 * cw, 0.075 * ch],
+    // Fallback für andere Kartenlayouts.
+    [0.00 * cw, 0.84 * ch, 0.98 * cw, 0.16 * ch]
   ];
 
   const nameRuns = [];
