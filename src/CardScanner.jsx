@@ -170,15 +170,25 @@ function scoreNameCandidate(candidate, confidence, occurrences) {
   const x = normalizeOcrLine(candidate);
   if (!x) return -Infinity;
   const letters = (x.match(/[\p{L}]/gu) || []).length;
+  const latinLetters = (x.match(/[A-Za-z]/g) || []).length;
+  const cjkLetters = (x.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/g) || []).length;
   const digits = (x.match(/\d/g) || []).length;
   const words = x.split(/\s+/).filter(Boolean);
   let score = Number(confidence) || 0;
-  score += Math.min(18, (occurrences || 1) * 4);
+
+  // Ein echter Kartenname taucht bei mehreren OCR-Varianten häufig wieder auf.
+  // Wiederholungen sind deshalb wichtiger als ein einzelner hoher Confidence-Wert.
+  score += Math.min(40, (occurrences || 1) * 8);
   score += Math.min(12, Math.max(0, letters - 3));
   if (words.length === 1) score += 12;
   if (words.length === 2) score += 4;
   if (words.length > 3) score -= 25;
   if (digits) score -= 20;
+
+  // Sehr kurze lateinische Treffer wie "eee" sind typische OCR-Fragmente.
+  // Kurze CJK/Japanisch/Koreanisch-Namen bleiben ausdrücklich erlaubt.
+  if (latinLetters > 0 && cjkLetters === 0 && latinLetters <= 3) score -= 28;
+
   // Typische Nicht-Namen, die bei Pokémon-Karten direkt unter/bei dem Namen stehen.
   if (/^(phase|stufe|basis|basic|stage|hp|kp)$/i.test(x)) score -= 50;
   if (/^(entwickelt|entwickelt\s+sich|aus|evolves|evolves\s+from|from|phase|stufe|basic|stage)$/i.test(x)) score -= 65;
