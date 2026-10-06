@@ -174,6 +174,7 @@ function ValueChart({ points }) {
   const diff = last.value - first.value;
   const pct = first.value > 0 ? (diff / first.value) * 100 : 0;
   const fmtDate = (d) => { const [, m, dd] = d.split('-'); return `${dd}.${m}.`; };
+const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
   return (
     <div className="space-y-2">
@@ -2309,6 +2310,22 @@ useEffect(() => {
           owned={ownedMap}
         />
       )}
+      {/* CardScanner Modal */}
+{scanOpen && (
+  <CardScanner
+    onClose={() => setScanOpen(null)}
+    onPick={handleScanPick}
+    onSearch={scanSearch}
+    api={API_URL}
+  />
+)}
+{/* Batch-Scanner Modal falls geöffnet */}
+      {batchOpen && (
+        <BatchScanner
+          onClose={() => setBatchOpen(false)}
+          onAdd={addBatchToCollection}
+          api={API_URL}
+        />
 
       {saleItem && <RecordSaleModal item={saleItem} onClose={() => setSaleItem(null)} onDone={setToastMsg} />}
 
