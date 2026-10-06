@@ -1,12 +1,57 @@
 import React, { useState, useRef } from 'react';
 
+// Backend URL aus der Umgebungsvariable
+const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
+
+// ==========================================
+// Exporte für BatchScanner & KI-Anfragen
+// ==========================================
+
+export const loadImageSource = (file) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        resolve({ source: img, w: img.width, h: img.height });
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+};
+
+export const readCard = async (base64Image) => {
+  const response = await fetch(`${API_URL}/api/scan-genai`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ image: base64Image }),
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.error || 'Fehler beim Scannen der Karte.');
+  }
+
+  return data;
+};
+
+// ==========================================
+// Hauptkomponente CardScanner
+// ==========================================
+
 export default function CardScanner({ onSelectCard }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [scanResult, setScanResult] = useState(null);
   const fileInputRef = useRef(null);
 
-  // Bilddatei in Base64 umwandeln und schrumpfen (um Upload-Zeit zu sparen)
+  // Bilddatei in Base64 umwandeln und für schnellen Upload schrumpfen
   const processImage = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -55,21 +100,7 @@ export default function CardScanner({ onSelectCard }) {
 
     try {
       const base64Image = await processImage(file);
-
-      const response = await fetch(`${api || ''}/api/scan-genai`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ image: base64Image }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Fehler beim Scannen der Karte.');
-      }
-
+      const data = await readCard(base64Image);
       setScanResult(data);
     } catch (err) {
       setError(err.message);

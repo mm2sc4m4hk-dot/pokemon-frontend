@@ -1,8 +1,8 @@
 // Batch-Import per Foto: ein Foto einer Binder-Seite (z. B. 3×3) wird in Felder zerlegt,
-// jedes Feld per Texterkennung gelesen, gesucht und mit dem Bildvergleich geprüft.
+// jedes Feld per KI analysiert, gesucht und geprüft.
 // Danach kannst du die Treffer kontrollieren und alle auf einmal in die Collection legen.
 import React, { useState, useRef, useEffect } from 'react';
-import { getWorker, releaseWorkerLater, readCard, loadImageSource } from './CardScanner';
+import { readCard, loadImageSource } from './CardScanner';
 import { coverRect, buildQuery } from './scanParse';
 import { rankByImage } from './imageMatch';
 import { watchPrice } from './priceData';
@@ -67,7 +67,6 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
     return () => {
       aliveRef.current = false;
       if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-      releaseWorkerLater();
     };
   }, []);
 
@@ -109,30 +108,53 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
     setStep('review');
     setRunning(true);
     setCells(rects.map((_, i) => ({ idx: i, status: 'wait', name: '', number: '', thumb: '', cards: [], scores: {}, sel: -1, include: false })));
+    
     try {
-      setProgress('Lade Texterkennung …');
-      const worker = await getWorker((s) => aliveRef.current && setProgress(s));
       for (let i = 0; i < rects.length; i += 1) {
         if (!aliveRef.current) return;
-        setProgress(`Karte ${i + 1} / ${rects.length} wird gelesen …`);
+        setProgress(`Karte ${i + 1} / ${rects.length} wird per KI analysiert …`);
         const canvas = cellCanvas(photo.source, rects[i]);
         canvases.current[i] = canvas;
-        let read = { name: '', number: '' };
-        try { read = await readCard(worker, canvas); } catch (e) { /* Feld bleibt leer */ }
-        let found = { cards: [], scores: {} };
+        const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+
+        let name = '';
+        let number = '';
+        let foundCards = [];
+        let scores = {};
         let status = 'none';
+
         try {
-          found = await lookup(read.name, read.number, canvas);
-          status = found.cards.length ? 'ok' : 'none';
-        } catch (e) { status = 'error'; }
+          const scanResult = await readCard(base64Image);
+          name = scanResult.aiAnalysis?.name || '';
+          number = scanResult.aiAnalysis?.number || '';
+          foundCards = scanResult.results || [];
+
+          // Fallback-Suche, falls Backend-Ergebnis leer ist, aber ein Name/Nummer von KI erkannt wurde
+          if (foundCards.length === 0 && (name || number)) {
+            const fallback = await lookup(name, number, canvas);
+            foundCards = fallback.cards || [];
+            scores = fallback.scores || {};
+          }
+
+          status = foundCards.length ? 'ok' : 'none';
+        } catch (e) {
+          status = 'error';
+        }
+
         if (!aliveRef.current) return;
         patch(i, {
-          status, name: read.name, number: read.number, thumb: smallThumb(canvas),
-          cards: found.cards, scores: found.scores, sel: found.cards.length ? 0 : -1, include: found.cards.length > 0
+          status,
+          name,
+          number,
+          thumb: smallThumb(canvas),
+          cards: foundCards,
+          scores,
+          sel: foundCards.length ? 0 : -1,
+          include: foundCards.length > 0
         });
       }
     } catch (e) {
-      if (aliveRef.current) setError('Texterkennung fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
+      if (aliveRef.current) setError('Analyse fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
     } finally {
       if (aliveRef.current) { setRunning(false); setProgress(''); }
     }
@@ -236,7 +258,6 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
             {running && (
               <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 text-xs text-cyan-300 flex items-center gap-2">
                 <span className="animate-spin">⚡</span> {progress}
-                <span className="text-slate-500 ml-auto hidden sm:inline">Beim ersten Mal lädt die Texterkennung ihre Sprachdaten.</span>
               </div>
             )}
             {error && <p className="text-xs text-amber-300">{error}</p>}
@@ -291,7 +312,7 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
                         Hinzufügen
                       </label>
                       <span className="text-[10px] text-slate-500">
-                        {c.status === 'wait' && 'wird gelesen …'}
+                        {c.status === 'wait' && 'wird analysiert …'}
                         {c.status === 'none' && (c.name ? 'nichts gefunden' : 'leer / nicht erkannt')}
                         {c.status === 'error' && 'Suche fehlgeschlagen'}
                       </span>
