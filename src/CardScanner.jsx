@@ -236,25 +236,27 @@ export async function readCard(worker, card) {
   // Pokémon-Kartennamen sitzen etwas unterhalb der oberen Kante. Wir lesen bewusst
   // mehrere Varianten und wählen später nicht einfach den ERSTEN OCR-Treffer.
   const nameBoxes = [
-    // Zuerst sehr eng um die eigentliche Namenszeile lesen. Die Beschreibung
-    // darunter darf nicht als Name gewinnen (z. B. "Entwickelt sich ...").
-    [0.13 * cw, 0.025 * ch, 0.68 * cw, 0.070 * ch],
-    [0.08 * cw, 0.020 * ch, 0.78 * cw, 0.085 * ch],
-    [0.04 * cw, 0.015 * ch, 0.90 * cw, 0.105 * ch],
-    [0.015 * cw, 0.010 * ch, 0.96 * cw, 0.135 * ch]
+    // Mehrere Geometrien: die erste Buchstaben dürfen nicht abgeschnitten werden.
+    // Die rechte Kartenseite enthält oft HP/Symbole und wird deshalb bewusst
+    // ausgespart; die breite Variante dient nur als Fallback.
+    [0.00 * cw, 0.018 * ch, 0.76 * cw, 0.060 * ch],
+    [0.00 * cw, 0.028 * ch, 0.82 * cw, 0.070 * ch],
+    [0.02 * cw, 0.012 * ch, 0.88 * cw, 0.095 * ch],
+    [0.00 * cw, 0.000 * ch, 0.92 * cw, 0.125 * ch],
+    [0.00 * cw, 0.035 * ch, 0.72 * cw, 0.110 * ch]
   ];
   const numBoxes = [
-    // Die Setnummer sitzt bei modernen Karten meist unten links, aber je nach
-    // Layout/Set etwas höher, weiter rechts oder näher am Rand. Deshalb lesen
-    // wir mehrere überlappende Streifen statt nur einen festen Ausschnitt.
-    [0.00 * cw, 0.785 * ch, 0.48 * cw, 0.215 * ch],
-    [0.00 * cw, 0.835 * ch, 0.58 * cw, 0.165 * ch],
-    [0.00 * cw, 0.885 * ch, 0.62 * cw, 0.115 * ch],
-    [0.12 * cw, 0.785 * ch, 0.55 * cw, 0.215 * ch],
-    [0.20 * cw, 0.785 * ch, 0.65 * cw, 0.215 * ch],
-    [0.38 * cw, 0.785 * ch, 0.62 * cw, 0.215 * ch],
-    [0.00 * cw, 0.735 * ch, 1.00 * cw, 0.265 * ch],
-    [0.00 * cw, 0.680 * ch, 1.00 * cw, 0.320 * ch]
+    // Nummer zuerst dort, wo sie bei modernen Karten normalerweise sitzt.
+    [0.00 * cw, 0.900 * ch, 0.42 * cw, 0.100 * ch],
+    [0.00 * cw, 0.850 * ch, 0.50 * cw, 0.150 * ch],
+    [0.00 * cw, 0.800 * ch, 0.58 * cw, 0.200 * ch],
+    [0.08 * cw, 0.870 * ch, 0.52 * cw, 0.130 * ch],
+    [0.00 * cw, 0.920 * ch, 0.65 * cw, 0.080 * ch],
+    // Fallbacks für abweichende Layouts.
+    [0.20 * cw, 0.850 * ch, 0.55 * cw, 0.150 * ch],
+    [0.35 * cw, 0.820 * ch, 0.65 * cw, 0.180 * ch],
+    [0.00 * cw, 0.740 * ch, 1.00 * cw, 0.260 * ch],
+    [0.00 * cw, 0.660 * ch, 1.00 * cw, 0.340 * ch]
   ];
 
   const nameRuns = [];
@@ -357,7 +359,10 @@ export async function readCard(worker, card) {
   const rankedNumbers = [...numberMap.values()]
     .map((x) => ({ ...x, score: scoreCardNumber(x.parsed, x.confidence, x.occurrences, x.boxIndex) }))
     .sort((a, b) => b.score - a.score);
-  const numberCandidates = rankedNumbers.slice(0, 24).map((x) => x.parsed);
+  const numberCandidates = rankedNumbers
+    .filter((x) => x.score >= 35)
+    .slice(0, 24)
+    .map((x) => x.parsed);
   const number = numberCandidates[0] || '';
 
   const thumb = (c) => {
@@ -524,7 +529,25 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
       }).sort((a, b) => b.score - a.score);
 
       const hasExactNumber = ranked.some((x) => x.score >= 1000);
-      let list = hasExactNumber ? ranked.filter((x) => x.score >= 1000).map((x) => x.card) : ranked.map((x) => x.card);
+      const strongName = ranked.some((x) => {
+        const best = names.reduce((m, candidate) => Math.max(m, nameSimilarity(candidate, x.card.name)), 0);
+        return best >= 70;
+      });
+
+      // Ein OCR-Nummerntreffer allein reicht nicht mehr. Wenn die Nummer nicht
+      // exakt in der Datenbank existiert und der Name gleichzeitig nur Müll ist,
+      // zeigen wir lieber KEINE falsche Karte.
+      let list;
+      if (hasExactNumber) {
+        list = ranked.filter((x) => x.score >= 1000).map((x) => x.card);
+      } else if (strongName) {
+        list = ranked.filter((x) => {
+          const best = names.reduce((m, candidate) => Math.max(m, nameSimilarity(candidate, x.card.name)), 0);
+          return best >= 45;
+        }).map((x) => x.card);
+      } else {
+        list = [];
+      }
 
       if (list.length > 1 && canvasRef.current && api) {
         try {
@@ -538,7 +561,8 @@ export default function CardScanner({ mode, onClose, onResult, onSearch, onPick,
         setResults(list.slice(0, 24));
         if (!list.length) setNote('Keine Karte eindeutig gefunden. Bitte nochmal mit scharfem, reflexionsfreiem Foto scannen.');
         else if (hasExactNumber) setNote('Exakte Kartennummer hat Vorrang vor OCR-Name und Bildähnlichkeit.');
-        else setNote('Mehrere OCR-Namen und Nummern wurden gegen die Kartendaten geprüft.');
+        else if (strongName) setNote('Kein sicherer Nummerntreffer – die Karte wurde über mehrere Namenskandidaten geprüft.');
+        else setNote('OCR war nicht eindeutig. Es wurde bewusst keine zufällige Karte vorgeschlagen.');
       }
     } catch (e) {
       if (aliveRef.current) { setResults(null); setError('Suche fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler')); }
