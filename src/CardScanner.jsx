@@ -236,27 +236,26 @@ export async function readCard(worker, card) {
   // Pokémon-Kartennamen sitzen etwas unterhalb der oberen Kante. Wir lesen bewusst
   // mehrere Varianten und wählen später nicht einfach den ERSTEN OCR-Treffer.
   const nameBoxes = [
-    // Mehrere Geometrien: die erste Buchstaben dürfen nicht abgeschnitten werden.
-    // Die rechte Kartenseite enthält oft HP/Symbole und wird deshalb bewusst
-    // ausgespart; die breite Variante dient nur als Fallback.
-    [0.00 * cw, 0.018 * ch, 0.76 * cw, 0.060 * ch],
-    [0.00 * cw, 0.028 * ch, 0.82 * cw, 0.070 * ch],
-    [0.02 * cw, 0.012 * ch, 0.88 * cw, 0.095 * ch],
-    [0.00 * cw, 0.000 * ch, 0.92 * cw, 0.125 * ch],
-    [0.00 * cw, 0.035 * ch, 0.72 * cw, 0.110 * ch]
+    // Der Kartenname steht ganz oben links. Wir halten die erste Zone bewusst
+    // sehr flach, damit "Entwick...", "Basis", HP usw. nicht als Name mitgelesen werden.
+    [0.015 * cw, 0.018 * ch, 0.72 * cw, 0.043 * ch],
+    [0.010 * cw, 0.024 * ch, 0.76 * cw, 0.052 * ch],
+    [0.020 * cw, 0.012 * ch, 0.82 * cw, 0.065 * ch],
+    [0.000 * cw, 0.005 * ch, 0.88 * cw, 0.080 * ch],
+    [0.000 * cw, 0.030 * ch, 0.70 * cw, 0.075 * ch]
   ];
   const numBoxes = [
-    // Nummer zuerst dort, wo sie bei modernen Karten normalerweise sitzt.
-    [0.00 * cw, 0.900 * ch, 0.42 * cw, 0.100 * ch],
-    [0.00 * cw, 0.850 * ch, 0.50 * cw, 0.150 * ch],
-    [0.00 * cw, 0.800 * ch, 0.58 * cw, 0.200 * ch],
-    [0.08 * cw, 0.870 * ch, 0.52 * cw, 0.130 * ch],
-    [0.00 * cw, 0.920 * ch, 0.65 * cw, 0.080 * ch],
-    // Fallbacks für abweichende Layouts.
-    [0.20 * cw, 0.850 * ch, 0.55 * cw, 0.150 * ch],
-    [0.35 * cw, 0.820 * ch, 0.65 * cw, 0.180 * ch],
-    [0.00 * cw, 0.740 * ch, 1.00 * cw, 0.260 * ch],
-    [0.00 * cw, 0.660 * ch, 1.00 * cw, 0.340 * ch]
+    // Die Set-/Kartennummer sitzt bei den getesteten Karten unten links.
+    // Kleine, gezielte Zonen sind absichtlich besser als ein großer Footer-Crop,
+    // weil dort sonst Illustrator-/Copyright-/Regeltext als "Nummer" erkannt wird.
+    [0.00 * cw, 0.925 * ch, 0.30 * cw, 0.055 * ch],
+    [0.00 * cw, 0.900 * ch, 0.34 * cw, 0.080 * ch],
+    [0.02 * cw, 0.875 * ch, 0.40 * cw, 0.110 * ch],
+    [0.00 * cw, 0.945 * ch, 0.38 * cw, 0.055 * ch],
+    [0.06 * cw, 0.900 * ch, 0.34 * cw, 0.075 * ch],
+    // Fallbacks für leicht abweichende Drucklayouts.
+    [0.12 * cw, 0.870 * ch, 0.42 * cw, 0.100 * ch],
+    [0.00 * cw, 0.840 * ch, 0.48 * cw, 0.120 * ch]
   ];
 
   const nameRuns = [];
