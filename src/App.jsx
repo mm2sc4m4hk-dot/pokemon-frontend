@@ -2326,7 +2326,7 @@ useEffect(() => {
           onAdd={addBatchToCollection}
           api={API_URL}
         />
-
+)}
       {saleItem && <RecordSaleModal item={saleItem} onClose={() => setSaleItem(null)} onDone={setToastMsg} />}
 
       {modalType && selectedCard && (
