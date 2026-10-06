@@ -26,12 +26,21 @@ const pad = (n) => String(n).padStart(3, '0');
 const plain = (name) => String(name || '').replace(/\s*\[.*\]\s*$/, '');
 const spriteUrl = (id) => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
 
+// Set-Namen-Normalisierung für Zusatzsuche
+const normSetName = (s) => {
+  const q = String(s || '').toLowerCase().trim();
+  if (!q) return '';
+  if (q.includes('30 jahre') || q.includes('30th') || q.includes('30 j') || q === '30') return '30th anniversary';
+  if (q.includes('25 jahre') || q.includes('25th') || q.includes('celebrations')) return 'celebrations';
+  return q;
+};
+
 // Filtertext -> mehrere mögliche Schreibweisen (deutsch/englisch)
 function makeMatcher(query) {
   const t = String(query || '').trim().toLowerCase();
   if (!t) return () => true;
   const alts = [t];
-  if (/^30\s*(jahre|j\b|th)/.test(t)) alts.push('30th', '30 jahre', 'anniversary');
+  if (/^30(\s|$)/.test(t)) alts.push('30th', '30 jahre', 'anniversary');
   if (/^25\s*(jahre|j\b|th)|^celebrations/.test(t)) alts.push('25th', '25 jahre', 'celebrations');
   return (txt) => {
     const s = String(txt || '').toLowerCase();
@@ -430,13 +439,40 @@ function DexDetail({ api, dex, collection, ownedIds, watchIds, onWish, onAddColl
   const res = useJson(api, `/api/dex/${dex.id}`);
   const [filterQ, setFilterQ] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [extraAll, setExtraAll] = useState(false);
+  const [extra, setExtra] = useState({ loading: false, cards: [] });
 
-  const all = res.data?.cards || [];
+  // Zusätzlich per Namenssuche laden (findet auch Karten, die im Pokédex-Index fehlen)
+  useEffect(() => {
+    const f = filterQ.trim();
+    if (!f && !extraAll) { setExtra({ loading: false, cards: [] }); return undefined; }
+    let alive = true;
+    const t = setTimeout(async () => {
+      setExtra((e) => ({ ...e, loading: true }));
+      try {
+        const params = new URLSearchParams({ name: dex.name });
+        const s = normSetName(f);
+        if (s) params.set('set', s);
+        const r = await fetch(`${api}/api/cards?${params.toString()}`);
+        const d = r.ok ? await r.json() : [];
+        const cards = (Array.isArray(d) ? d : [])
+          .filter((c) => c.id && !String(c.id).startsWith('cm-'))
+          .map((c) => ({ id: c.id, name: c.name, image: c.images?.small || '', setName: c.set?.name || '', localId: c.number || '' }));
+        if (alive) setExtra({ loading: false, cards });
+      } catch (e) {
+        if (alive) setExtra({ loading: false, cards: [] });
+      }
+    }, f ? 600 : 0);
+    return () => { alive = false; clearTimeout(t); };
+  }, [api, dex.name, filterQ, extraAll]);
+
+  const base = res.data?.cards || [];
+  const baseIds = new Set(base.map((c) => c.id));
+  const all = [...base, ...extra.cards.filter((c) => !baseIds.has(c.id))];
   const dexCardIds = new Set(all.map((c) => c.id));
   const match = makeMatcher(filterQ);
 
-
-const mine = [];
+  const mine = [];
   const seen = new Set();
   collection.forEach((c) => {
     if (!c.id || seen.has(c.id)) return;
@@ -446,7 +482,8 @@ const mine = [];
       if (match(`${c.name} ${setName}`)) mine.push(c);
     }
   });
-  const missingAll = all.filter((c) => !ownedIds.has(c.id) && match(`${c.name} ${c.setName || ''}`));
+
+  const missingAll = all.filter((c) => !ownedIds.has(c.id) && match(`${c.name} ${c.set?.name || c.setName || ''}`));
   const missing = showAll ? missingAll : missingAll.slice(0, 48);
 
   return (
@@ -459,6 +496,14 @@ const mine = [];
       )}
       <SlotPhoto ui={photoUi} />
       <input value={filterQ} onChange={(e) => setFilterQ(e.target.value)} placeholder="Filtern nach Set oder Name …" className="w-full bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none" />
+
+      {extra.loading && <p className="text-[11px] text-cyan-400 animate-pulse mt-1">Suche zusätzlich per Name …</p>}
+      {!filterQ.trim() && !extraAll && (
+        <button onClick={() => setExtraAll(true)} className="w-full text-[11px] font-bold text-cyan-400 border border-slate-700 rounded-lg py-1.5 hover:bg-slate-800 mt-2">
+          Fehlt eine Karte? Zusätzlich per Namenssuche laden
+        </button>
+      )}
+
       {res.loading && <Loading text="Lade Karten …" />}
       {res.error && <ErrorBox text={`Karten konnten nicht geladen werden: ${res.error}`} />}
 
@@ -476,7 +521,7 @@ const mine = [];
                         <Img src={c.customImage || c.images?.small} alt={c.name} className={`w-full rounded-md ${currentId === c.id ? 'ring-2 ring-cyan-400' : ''}`} />
                         {onPick && <span className="absolute bottom-1 left-1 bg-cyan-500 text-slate-950 text-[9px] font-black rounded px-1.5">Wählen</span>}
                       </div>
-                      <p className="text-[9px] text-slate-500 truncate">{c.set?.name}</p>
+                      <p className="text-[9px] text-slate-500 truncate">{c.set?.name || c.setName}</p>
                     </button>
                   ))}
                 </div>
