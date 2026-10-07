@@ -69,7 +69,7 @@ export const readCard = async (base64Image, api = API_URL, { retries = 1 } = {})
 };
 
 // Foto verkleinern (schneller Upload, unter dem 10-MB-Limit des Servers)
-function shrinkToCanvas(source, w, h, maxSide = 1280) {
+function shrinkToCanvas(source, w, h, maxSide = 900) {
   const scale = Math.min(1, maxSide / Math.max(w, h));
   const c = document.createElement('canvas');
   c.width = Math.round(w * scale);
@@ -103,7 +103,7 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
 
   const rank = async (list) => {
     if (list.length > 1 && canvasRef.current) {
-      try { return await rankByImage(canvasRef.current, list, api); } catch (e) { /* ohne Bildvergleich */ }
+      try { return await rankByImage(canvasRef.current, list, api, 8); } catch (e) { /* ohne Bildvergleich */ }
     }
     return { cards: list, scores: {} };
   };
@@ -149,7 +149,7 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
       const { source, w, h } = await loadImageSource(file);
       const canvas = shrinkToCanvas(source, w, h);
       canvasRef.current = canvas;
-      dataUrlRef.current = canvas.toDataURL('image/jpeg', 0.85);
+      dataUrlRef.current = canvas.toDataURL('image/jpeg', 0.8);
       setPreview(dataUrlRef.current);
       await analyze(dataUrlRef.current);
     } catch (err) {

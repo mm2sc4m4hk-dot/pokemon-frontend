@@ -28,7 +28,7 @@ function cellRects(w, h, rows, cols, trim) {
 function cellCanvas(source, rect) {
   const { sx, sy, sw } = coverRect(rect.w, rect.h);
   const sh = (sw * 7) / 5;
-  const outW = Math.min(1100, Math.round(sw));
+  const outW = Math.min(800, Math.round(sw));
   const c = document.createElement('canvas');
   c.width = outW;
   c.height = Math.round((outW * 7) / 5);
@@ -95,7 +95,7 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
     let list = await onSearch(buildQuery(nm, number));
     if (list.length === 0 && number) list = await onSearch(nm);
     if (list.length > 1 && canvas) {
-      try { return await rankByImage(canvas, list, api); } catch (e) { /* ohne Bildvergleich */ }
+      try { return await rankByImage(canvas, list, api, 8); } catch (e) { /* ohne Bildvergleich */ }
     }
     return { cards: list, scores: {} };
   };
