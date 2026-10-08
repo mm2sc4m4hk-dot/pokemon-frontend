@@ -301,7 +301,7 @@ function SlotPhoto({ ui }) {
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-[60] bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-2xl max-h-[88vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-slate-900 border border-slate-700 w-full sm:max-w-2xl max-h-[88vh] overflow-y-auto overflow-x-hidden rounded-t-2xl sm:rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3">
           <div className="font-bold text-slate-100 min-w-0">{title}</div>
           <button onClick={onClose} className="text-slate-400 hover:text-white text-lg px-2">✕</button>
@@ -789,16 +789,16 @@ function CardPicker({ api, collection, ownedIds, watchIds, onWish, Img, current,
               value={sq}
               onChange={(e) => setSq(e.target.value)}
               placeholder='Name, z. B. "Glumanda"'
-              className="flex-1 bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
+              className="flex-1 min-w-0 bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
             />
             <input
               type="text"
               value={sset}
               onChange={(e) => setSset(e.target.value)}
               placeholder='Set, z. B. "30 Jahre"'
-              className="w-28 bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
+              className="w-24 min-w-0 shrink bg-slate-950 border border-slate-700 focus:border-cyan-400 text-white rounded-lg px-3 py-2 text-xs outline-none"
             />
-            <button type="submit" className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs px-4 rounded-lg">
+            <button type="submit" className="shrink-0 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs px-3 rounded-lg">
               Suche
             </button>
           </form>
