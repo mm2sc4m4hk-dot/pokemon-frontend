@@ -101,11 +101,18 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
     return () => { aliveRef.current = false; };
   }, []);
 
-  const rank = async (list) => {
-    if (list.length > 1 && canvasRef.current) {
-      try { return await rankByImage(canvasRef.current, list, api, 8); } catch (e) { /* ohne Bildvergleich */ }
-    }
-    return { cards: list, scores: {} };
+  // Treffer werden sofort angezeigt; der Bildvergleich läuft im Hintergrund und sortiert danach nur um
+  const rankToken = useRef(0);
+  const rankInBackground = (list) => {
+    rankToken.current += 1;
+    const token = rankToken.current;
+    const canvas = canvasRef.current;
+    if (list.length < 2 || !canvas) return;
+    rankByImage(canvas, list, api, 8)
+      .then((r) => {
+        if (aliveRef.current && rankToken.current === token) { setCards(r.cards); setScores(r.scores); }
+      })
+      .catch(() => { /* ohne Bildvergleich */ });
   };
 
   // Analysiert das aktuelle Foto (auch für „Erneut versuchen“, ohne neu zu fotografieren)
@@ -127,12 +134,10 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
         if (list.length === 0 && ai.number) { try { list = await onSearch(ai.name); } catch (err) { /* egal */ } }
       }
       if (!aliveRef.current) return;
-      setStatus('Vergleiche Bilder …');
-      const ranked = await rank(list);
-      if (!aliveRef.current) return;
-      setCards(ranked.cards);
-      setScores(ranked.scores);
+      setCards(list);
+      setScores({});
       setScanned(true);
+      rankInBackground(list);
     } catch (err) {
       if (aliveRef.current) setError(err.message || 'Scan fehlgeschlagen.');
     } finally {
@@ -163,11 +168,11 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
     try {
       let list = await onSearch(buildQuery(name, number));
       if (list.length === 0 && number) list = await onSearch(name.trim());
-      const ranked = await rank(list);
       if (!aliveRef.current) return;
-      setCards(ranked.cards);
-      setScores(ranked.scores);
+      setCards(list);
+      setScores({});
       setScanned(true);
+      rankInBackground(list);
     } catch (err) {
       if (aliveRef.current) setError(err.message || 'Suche fehlgeschlagen.');
     } finally {
