@@ -20,8 +20,9 @@ import { auth, db } from './firebase';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
 import { CardHistoryChart, WeeklyMovers, PushToggle, OutlierBadge } from './Insights';
-import { CompletionPanel, BinderCompletion } from './Completion';
-import CardScanner from './CardScanner';
+import { BinderCompletion } from './Completion';
+import CardScanner, { ScanHistory } from './CardScanner';
+import { SetsView } from './SetsMaster';
 import { SharePanel, BackupPanel, WantlistExport, SharedView, OwnedBadge, buildOwnedMap } from './Backup';
 import BatchScanner from './BatchScanner';
 import { SellAllCalculator, PortfolioSplit, RecordSaleModal, SalesHistory, NewSetsBanner, TradeCalculator, SellerPlanner } from './Features';
@@ -88,6 +89,7 @@ const gradeFactor = (g) => {
 };
 const gradeLabel = (g) => (g && g.company && g.grade ? `${g.company} ${g.grade}` : '');
 const makeGrade = (company, grade) => (company && grade ? { company, grade } : null);
+const gradeKey = (g) => (g && g.company && g.grade ? `${g.company}|${g.grade}` : '');
 
 const usernameToEmail = (username) => `${username.trim().toLowerCase()}@poketracker.local`;
 
@@ -304,116 +306,6 @@ function SellView({ items, onSold }) {
   );
 }
 
-const setIdOf = (item) => {
-  if (item?.set?.id) return item.set.id;
-  const id = String(item?.id || '');
-  if (!id || id.startsWith('custom-') || id.startsWith('cm-')) return null;
-  const i = id.lastIndexOf('-');
-  return i > 0 ? id.slice(0, i) : null;
-};
-
-function SetsView({ collection, watchIds }) {
-  const [open, setOpen] = useState(null);
-  const [cache, setCache] = useState({});
-  const [noSecret, setNoSecret] = useState({});
-
-  const groups = new Map();
-  let withoutSet = 0;
-  collection.forEach(item => {
-    const sid = setIdOf(item);
-    if (!sid) { withoutSet += 1; return; }
-    const g = groups.get(sid) || { id: sid, name: item.set?.name || sid, total: item.set?.total || null, ids: new Set() };
-    g.ids.add(item.id);
-    groups.set(sid, g);
-  });
-  const list = [...groups.values()].sort((a, b) => {
-    const pa = a.total ? a.ids.size / a.total : 0; const pb = b.total ? b.ids.size / b.total : 0;
-    return pb - pa || a.name.localeCompare(b.name);
-  });
-
-  const toggle = async (g) => {
-    if (open === g.id) { setOpen(null); return; }
-    setOpen(g.id);
-    if (cache[g.id]?.cards) return;
-    setCache(c => ({ ...c, [g.id]: { loading: true } }));
-    try {
-      const res = await fetch(`${API_URL}/api/sets/${encodeURIComponent(g.id)}`);
-      if (!res.ok) throw new Error('Set nicht gefunden');
-      const data = await res.json();
-      setCache(c => ({ ...c, [g.id]: { cards: data.cards || [] } }));
-    } catch (e) {
-      setCache(c => ({ ...c, [g.id]: { error: e.message || 'Fehler beim Laden' } }));
-    }
-  };
-
-  if (list.length === 0) {
-    return <div className="text-center py-20 text-slate-500">Noch keine Karten mit Set-Zuordnung in deiner Collection.</div>;
-  }
-
-  return (
-    <div className="space-y-3">
-      {list.map(g => {
-        const owned = g.ids.size;
-        const pct = g.total ? Math.min(100, Math.round((owned / g.total) * 100)) : 0;
-        const c = cache[g.id];
-        const missing = c?.cards ? c.cards.filter(card => !g.ids.has(card.id)) : [];
-        const isSecret = (card) => !!g.total && /^\d+$/.test(String(card.localId)) && parseInt(card.localId, 10) > g.total;
-        const hideSecret = !!noSecret[g.id];
-        const costCards = (hideSecret ? missing.filter(card => !isSecret(card)) : missing)
-          .map(card => ({ id: card.id, name: card.name, image: card.image, localId: card.localId, setName: g.name }));
-        return (
-          <div key={g.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 shadow-md">
-            <button onClick={() => toggle(g)} className="w-full text-left">
-              <div className="flex justify-between items-baseline gap-2">
-                <span className="font-bold text-sm text-slate-200 truncate">{g.name}</span>
-                <span className="text-xs text-cyan-400 font-bold whitespace-nowrap">{owned}{g.total ? ` / ${g.total}` : ''}{g.total ? ` (${pct}%)` : ''}</span>
-              </div>
-              <div className="h-2 bg-slate-800 rounded-full mt-2 overflow-hidden">
-                <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
-              </div>
-            </button>
-            {open === g.id && (
-              <div className="mt-3 pt-3 border-t border-slate-800">
-                {c?.loading && <p className="text-xs text-cyan-400">Lade Kartenliste…</p>}
-                {c?.error && <p className="text-xs text-rose-400">{c.error}</p>}
-                {c?.cards && (missing.length === 0
-                  ? <p className="text-xs text-emerald-400">Komplett – dir fehlt keine Karte dieses Sets. 🎉</p>
-                  : <>
-                      <p className="text-[10px] text-slate-500 mb-2">Fehlend: {missing.length} (inkl. Secret Rares)</p>
-                      <CompletionPanel
-                        title="💶 Was kostet es, dieses Set zu komplettieren?"
-                        cards={costCards}
-                        api={API_URL}
-                        uid={auth.currentUser?.uid}
-                        watchIds={watchIds}
-                        Img={CardImage}
-                      />
-                      {g.total ? (
-                        <label className="flex items-center gap-2 text-[11px] text-slate-400 mb-3">
-                          <input type="checkbox" checked={hideSecret} onChange={e => setNoSecret(s => ({ ...s, [g.id]: e.target.checked }))} className="accent-cyan-500" />
-                          Secret Rares (Nr. über {g.total}) nicht mitrechnen
-                        </label>
-                      ) : null}
-                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                        {missing.map(card => (
-                          <div key={card.id} className="text-center">
-                            <CardImage src={card.image} alt={card.name} className="w-full rounded-md opacity-70" />
-                            <p className="text-[10px] text-slate-400 mt-1 truncate">#{card.localId} {card.name}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
-      {withoutSet > 0 && <p className="text-[10px] text-slate-500 text-center">{withoutSet} Karten ohne Set-Zuordnung sind hier nicht enthalten.</p>}
-    </div>
-  );
-}
-
 function CardTitle({ card, size = 'sm', truncate = true }) {
   const isCm = card.source === 'cardmarket';
   const m = isCm ? String(card.name).match(/^([^\[']*?)\s*\[(.*)\]\s*$/) : null;
@@ -558,11 +450,12 @@ useEffect(() => {
       }
 
       const entries = full.map((card) => ({ card, qty: counts.get(card.id) || 1 }));
-      await addBatchToCollection(
+      const ok = await addBatchToCollection(
         entries,
         loadSetting('lastCondition', '') || 'Near Mint',
         loadSetting('lastLang', '') || 'Deutsch 🇩🇪'
       );
+      if (ok === false) return;
       setBatchCardNumbers('');
       if (notFound.length) setToastMsg(`Nicht gefunden: ${notFound.join(', ')}`);
     } catch (e) {
@@ -618,12 +511,19 @@ useEffect(() => {
   const changeWishSort = (k) => { setWishSort(k); saveSetting('wishSort', k); };
 
   const [toastMsg, setToastMsg] = useState('');
+  const [batchDup, setBatchDup] = useState(null); // Duplikate bei Mehrfach-Hinzufügen (Batch-Foto, Booster-Eingabe)
+  const batchDupResolve = useRef(null);
+  const askBatchDup = (list) => new Promise((resolve) => { batchDupResolve.current = resolve; setBatchDup(list); });
+  const answerBatchDup = (v) => { setBatchDup(null); if (batchDupResolve.current) batchDupResolve.current(v); batchDupResolve.current = null; };
+  const [dupPrompt, setDupPrompt] = useState(null); // vorhandener Eintrag, wenn die Karte schon in der Collection liegt
 
   const [scanOpen, setScanOpen] = useState(null);
   const [scanSeries, setScanSeries] = useState(() => loadSetting('scanSeries', '0') === '1');
   const [batchOpen, setBatchOpen] = useState(false);
   const [saleItem, setSaleItem] = useState(null);
   const scanFlowRef = useRef(false);
+  const [variantAuto, setVariantAuto] = useState(false); // Variante kam vom Scanner (Vorschlag)
+  const [scanHistory, setScanHistory] = useState([]); // Scan-Verlauf mit „Rückgängig“ (nur Einzelscans)
 
   const unsubscribers = useRef([]);
 
@@ -742,6 +642,7 @@ useEffect(() => {
         setCollection([]);
         setWatchlist([]);
         setSnapshots([]);
+        setScanHistory([]);
         setCollectionReady(false);
         setWatchlistReady(false);
         setSnapshotsReady(false);
@@ -942,18 +843,38 @@ useEffect(() => {
     }
   };
 
-  const addToCollection = async () => {
+  // Gleiche Karte + gleicher Zustand, gleiche Sprache, gleiche Variante (und gleiches Grading) schon in der Collection?
+  const findDuplicate = (cardId, cond, lang, variant, grade) => collection.find((c) =>
+    c.id === cardId
+    && (c.userCondition || 'Near Mint') === cond
+    && (c.userLanguage || 'Deutsch 🇩🇪') === lang
+    && (c.userVariant || 'normal') === variant
+    && gradeKey(c.userGrade) === gradeKey(grade));
+
+  // forceNew === true: bewusst neuer Eintrag (Warnung mit „Nein“ beantwortet)
+  // mergeInto: vorhandener Eintrag, dessen Anzahl erhöht wird („Ja, +1“)
+  const addToCollection = async (forceNew = false, mergeInto = null) => {
     if (!auth.currentUser) return;
-    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant, makeGrade(gradeCompany, gradeValue));
+    const grade = makeGrade(gradeCompany, gradeValue);
+    if (forceNew !== true && !mergeInto) {
+      const dup = findDuplicate(selectedCard.id, cardCondition, cardLanguage, cardVariant, grade);
+      if (dup) { setDupPrompt(dup); return; }
+    }
+    const fromScan = scanFlowRef.current;
+    const watchRestore = moveFromWatchlistId && removeFromWatchlistAfter
+      ? (watchlist.find((c) => c.id === moveFromWatchlistId) || null)
+      : null;
+    const addQty = parseQty(cardQuantity);
+    const calculatedVal = calculatePrice(selectedCard, cardCondition, cardLanguage, cardVariant, grade);
     const newItem = {
       ...selectedCard,
       userCondition: cardCondition,
       userLanguage: cardLanguage,
       userVariant: cardVariant,
       userPrice: customPrice ? parseFloat(customPrice).toFixed(2) : calculatedVal,
-      userGrade: makeGrade(gradeCompany, gradeValue),
+      userGrade: grade,
       alertHigh: parseMoney(alertHigh) && parseFloat(parseMoney(alertHigh)) > 0 ? parseFloat(parseMoney(alertHigh)) : null,
-      userQuantity: parseQty(cardQuantity),
+      userQuantity: addQty,
       userPurchasePrice: parseMoney(purchasePrice),
       customImage: customImage || null,
       addedAt: Date.now()
@@ -962,20 +883,47 @@ useEffect(() => {
     delete newItem.instanceId;
     ['targetPrice', 'prevPrice', 'priceDay', 'alertedTarget', 'alertedAt', 'alertedPrice', 'priceUpdatedAt', 'targetHigh', 'alertedHigh'].forEach((k) => { delete newItem[k]; });
     try {
-      await addDoc(fsCollection(db, 'users', auth.currentUser.uid, 'collection'), newItem);
-      
+      const uid = auth.currentUser.uid;
+      const target = mergeInto ? (collection.find((c) => c.docId === mergeInto.docId) || mergeInto) : null;
+      let docId;
+      let newQty = addQty;
+      if (target) {
+        newQty = qtyOf(target) + addQty;
+        await updateDoc(doc(db, 'users', uid, 'collection', target.docId), { userQuantity: newQty });
+        docId = target.docId;
+      } else {
+        const created = await addDoc(fsCollection(db, 'users', uid, 'collection'), newItem);
+        docId = created.id;
+      }
+      if (fromScan) {
+        setScanHistory((h) => [{
+          docId,
+          name: plainName(selectedCard),
+          set: selectedCard.set?.name || '',
+          number: selectedCard.number || '',
+          image: customImage || selectedCard.images?.small || '',
+          condition: cardCondition,
+          variant: cardVariant,
+          watchRestore,
+          merged: target ? addQty : 0, // >0: Anzahl wurde nur erhöht, „Rückgängig“ zieht sie wieder ab
+          at: Date.now()
+        }, ...h].slice(0, 30));
+      }
+
       saveSetting('lastCondition', cardCondition);
       saveSetting('lastLang', cardLanguage);
 
       if (moveFromWatchlistId && removeFromWatchlistAfter) {
         await removeFromWatchlist(moveFromWatchlistId);
       }
+      setDupPrompt(null);
       setModalType(null);
+      setVariantAuto(false);
       setMoveFromWatchlistId(null);
       setCustomPrice('');
       setCustomImage('');
       setCardVariant('normal');
-      setToastMsg('Karte zur Collection hinzugefügt! ✓');
+      setToastMsg(target ? `Anzahl erhöht: jetzt ×${newQty} ✓` : 'Karte zur Collection hinzugefügt! ✓');
       const scanAgain = scanFlowRef.current && scanSeries && activeTab === 'collection';
       scanFlowRef.current = false;
       if (scanAgain) setTimeout(() => setScanOpen('collection'), 400);
@@ -987,10 +935,33 @@ useEffect(() => {
   const addBatchToCollection = async (entries, cond, lang) => {
     const uid = auth.currentUser?.uid;
     if (!uid) throw new Error('Nicht angemeldet.');
+    // Vorab prüfen, welche Karten schon (mit gleichem Zustand/Sprache/Variante) vorhanden sind -> Warnung
+    const dupList = entries.map(({ card, qty, variant: wanted }) => {
+      const av = getAvailableVariants(card);
+      const vk = (wanted && av.find((v) => v.key === wanted)?.key) || av[0].key;
+      const d = findDuplicate(card.id, cond, lang, vk, null);
+      return d ? { dup: d, qty } : null;
+    }).filter(Boolean);
+    let mode = 'merge';
+    if (dupList.length > 0) {
+      mode = await askBatchDup(dupList);
+      if (mode === 'cancel') return false;
+    }
     let batch = writeBatch(db);
     let ops = 0;
-    for (const { card, qty } of entries) {
-      const variant = getAvailableVariants(card)[0].key;
+    let merged = 0;
+    for (const { card, qty, variant: wanted } of entries) {
+      const avail = getAvailableVariants(card);
+      const variant = (wanted && avail.find((v) => v.key === wanted)?.key) || avail[0].key;
+      // Gleiche Karte/Zustand/Sprache/Variante schon vorhanden -> nur Anzahl erhöhen
+      const dup = findDuplicate(card.id, cond, lang, variant, null);
+      if (dup && mode === 'merge') {
+        batch.update(doc(db, 'users', uid, 'collection', dup.docId), { userQuantity: qtyOf(dup) + qty });
+        merged += 1;
+        ops += 1;
+        if (ops >= 400) { await batch.commit(); batch = writeBatch(db); ops = 0; }
+        continue;
+      }
       const item = {
         ...card,
         userCondition: cond,
@@ -1012,7 +983,31 @@ useEffect(() => {
     if (ops > 0) await batch.commit();
     saveSetting('lastCondition', cond);
     saveSetting('lastLang', lang);
-    setToastMsg(`${entries.length} Karten zur Collection hinzugefügt! ✓`);
+    setToastMsg(`${entries.length} Karten zur Collection hinzugefügt! ✓` + (merged ? ` (${merged} davon nur +Anzahl bei vorhandenen)` : ''));
+    return true;
+  };
+
+  // Scan rückgängig machen: Karte wieder aus der Collection löschen (und auf die Watchlist zurücklegen, falls sie von dort kam)
+  const undoScan = async (entry) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid || !entry) return;
+    try {
+      const cur = entry.merged ? collection.find((c) => c.docId === entry.docId) : null;
+      if (entry.merged && cur) {
+        await updateDoc(doc(db, 'users', uid, 'collection', entry.docId), { userQuantity: Math.max(1, qtyOf(cur) - entry.merged) });
+      } else if (!entry.merged) {
+        await deleteDoc(doc(db, 'users', uid, 'collection', entry.docId));
+      }
+      if (entry.watchRestore) {
+        const w = { ...entry.watchRestore };
+        delete w.docId; delete w.instanceId;
+        await setDoc(doc(db, 'users', uid, 'watchlist', w.id), w);
+      }
+      setScanHistory((h) => h.filter((x) => x.docId !== entry.docId));
+      setToastMsg(`Rückgängig: ${entry.name}`);
+    } catch (err) {
+      alert('Rückgängig fehlgeschlagen: ' + (err.message || 'Unbekannter Fehler'));
+    }
   };
 
   const isAutoPrice = (item) => {
@@ -1310,11 +1305,14 @@ useEffect(() => {
     return res.json();
   };
 
-  const beginAddToCollection = (card) => {
+  const beginAddToCollection = (card, preferred = null, auto = false) => {
     setSelectedCard(card);
     setCardCondition(loadSetting('lastCondition', '') || 'Near Mint');
     setCardLanguage(loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
-    setCardVariant(getAvailableVariants(card)[0].key);
+    const avail = getAvailableVariants(card);
+    const hit = preferred ? avail.find((v) => v.key === preferred) : null;
+    setCardVariant(hit ? hit.key : avail[0].key);
+    setVariantAuto(!!(hit && auto));
     setCustomImage(card.customImage || '');
     if (watchlistIds.has(card.id)) {
       setMoveFromWatchlistId(card.id);
@@ -1372,10 +1370,17 @@ useEffect(() => {
     }
   };
 
-  const handleScanPick = (card) => {
+  const handleScanPick = (card, variant = null, auto = false) => {
     setScanOpen(null);
-    beginAddToCollection(card);
+    beginAddToCollection(card, variant, auto);
     scanFlowRef.current = true;
+    // Gleiche Karte schon da (mit den zuletzt benutzten Werten)? Dann sofort „+1“ anbieten
+    const cond = loadSetting('lastCondition', '') || 'Near Mint';
+    const lang = loadSetting('lastLang', '') || 'Deutsch 🇩🇪';
+    const avail = getAvailableVariants(card);
+    const vKey = (variant && avail.find((v) => v.key === variant)?.key) || avail[0].key;
+    const dup = findDuplicate(card.id, cond, lang, vKey, null);
+    if (dup) setDupPrompt(dup);
   };
 
   const needsMeta = collection.filter((c) => c.id && c.dexId === undefined
@@ -1879,6 +1884,8 @@ useEffect(() => {
                 </div>
               )}
             </div>
+            <ScanHistory history={scanHistory} onUndo={undoScan} onClear={() => setScanHistory([])} Img={CardImage} />
+
             {/* PREIS-UPDATE BAR */}
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center gap-3 shadow-md">
               <button onClick={() => refreshPrices()} disabled={refreshing} className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-xs font-black px-3 py-2 rounded-lg transition-colors whitespace-nowrap">
@@ -1917,7 +1924,7 @@ useEffect(() => {
 
             {/* VIEWS & KARTEN GRID */}
             {collectionView === 'sets' ? (
-              <SetsView collection={collection} watchIds={watchlistIds} />
+              <SetsView collection={collection} watchIds={watchlistIds} api={API_URL} uid={auth.currentUser?.uid} Img={CardImage} />
             ) : collectionView === 'binder' ? (
               <>
                 <BinderCompletion uid={auth.currentUser?.uid} collection={collection} watchIds={watchlistIds} api={API_URL} Img={CardImage} />
@@ -2290,6 +2297,8 @@ useEffect(() => {
           api={API_URL}
           series={scanSeries}
           onSeriesChange={(v) => { setScanSeries(v); saveSetting('scanSeries', v ? '1' : '0'); }}
+          history={scanHistory}
+          onUndo={undoScan}
         />
       )}
 
@@ -2307,23 +2316,6 @@ useEffect(() => {
           owned={ownedMap}
         />
       )}
-      {/* CardScanner Modal */}
-{scanOpen && (
-  <CardScanner
-    onClose={() => setScanOpen(null)}
-    onPick={handleScanPick}
-    onSearch={scanSearch}
-    api={API_URL}
-  />
-)}
-{/* Batch-Scanner Modal falls geöffnet */}
-      {batchOpen && (
-        <BatchScanner
-          onClose={() => setBatchOpen(false)}
-          onAdd={addBatchToCollection}
-          api={API_URL}
-        />
-)}
       {saleItem && <RecordSaleModal item={saleItem} onClose={() => setSaleItem(null)} onDone={setToastMsg} />}
 
       {modalType && selectedCard && (
@@ -2410,9 +2402,10 @@ useEffect(() => {
                 </div>
                 <div>
                   <label className="text-xs text-slate-400">Variante</label>
-                  <select value={cardVariant} onChange={e => setCardVariant(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
+                  <select value={cardVariant} onChange={e => { setCardVariant(e.target.value); setVariantAuto(false); }} className="w-full bg-slate-950 border border-slate-800 text-slate-200 rounded-lg p-2 text-sm mt-1 focus:border-cyan-500 outline-none">
                     {variantChoices(selectedCard, cardVariant).map(v => <option key={v.key} value={v.key}>{v.label}</option>)}
                   </select>
+                  {variantAuto && <p className="text-[10px] text-amber-300 mt-1">Vom Scanner erkannt – bitte prüfen.</p>}
                 </div>
                 <div>
                   <label className="text-xs text-slate-400">Graded (PSA, BGS, CGC …)</label>
@@ -2474,12 +2467,53 @@ useEffect(() => {
             )}
 
             <div className="flex gap-2 pt-2">
-              <button onClick={() => { scanFlowRef.current = false; setModalType(null); setMoveFromWatchlistId(null); setEditOriginalPrice(''); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
+              <button onClick={() => { scanFlowRef.current = false; setVariantAuto(false); setModalType(null); setMoveFromWatchlistId(null); setEditOriginalPrice(''); setCustomPrice(''); setCustomImage(''); }} className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 py-3 rounded-xl font-bold text-sm transition-colors">Zurück</button>
               {modalType === 'detail' && !selectedCard.docId && selectedCard.id && !String(selectedCard.id).startsWith('custom-') && (
                 <button onClick={() => beginAddToCollection(selectedCard)} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">➕ Collection</button>
               )}
               {modalType === 'edit' && <button onClick={saveEdit} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">Speichern</button>}
-              {modalType === 'collection' && <button onClick={addToCollection} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">Hinzufügen</button>}
+              {modalType === 'collection' && <button onClick={() => addToCollection()} className="flex-1 bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-3 rounded-xl font-black text-sm transition-colors shadow-lg">Hinzufügen</button>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {batchDup && (
+        <div className="fixed inset-0 z-[90] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-3 max-h-[90vh] overflow-y-auto">
+            <h3 className="font-bold text-amber-300">⚠️ {batchDup.length} {batchDup.length === 1 ? 'Karte ist' : 'Karten sind'} schon vorhanden</h3>
+            <p className="text-xs text-slate-400">Gleicher Zustand, gleiche Sprache, gleiche Variante:</p>
+            <ul className="space-y-1 text-xs text-slate-300">
+              {batchDup.slice(0, 10).map(({ dup, qty }) => (
+                <li key={dup.docId} className="flex justify-between gap-2">
+                  <span className="truncate">{plainName(dup)}{dup.number ? ` #${dup.number}` : ''}</span>
+                  <span className="whitespace-nowrap text-cyan-300 font-bold">×{qtyOf(dup)} → ×{qtyOf(dup) + qty}</span>
+                </li>
+              ))}
+              {batchDup.length > 10 && <li className="text-slate-500">… und {batchDup.length - 10} weitere</li>}
+            </ul>
+            <div className="flex flex-col gap-2 pt-1">
+              <button onClick={() => answerBatchDup('merge')} className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-2.5 rounded-xl font-black text-sm">Ja, Anzahl erhöhen</button>
+              <button onClick={() => answerBatchDup('new')} className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl font-bold text-sm">Nein, jeweils neuer Eintrag</button>
+              <button onClick={() => answerBatchDup('cancel')} className="text-xs text-slate-400 hover:text-slate-200 py-1">Abbrechen</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dupPrompt && modalType === 'collection' && selectedCard && (
+        <div className="fixed inset-0 z-[75] bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-amber-500/50 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-3">
+            <h3 className="font-bold text-amber-300">⚠️ Karte schon vorhanden</h3>
+            <p className="text-sm text-slate-300">
+              <span className="font-bold text-slate-100">{plainName(dupPrompt)}</span> liegt bereits in deiner Collection
+              (×{qtyOf(dupPrompt)}, {dupPrompt.userCondition}, {String(dupPrompt.userLanguage || '').split(' ')[0]}, {VARIANTS.find((v) => v.key === (dupPrompt.userVariant || 'normal'))?.label || 'Normal'}) – gleicher Zustand, gleiche Sprache, gleiche Variante.
+            </p>
+            <p className="text-xs text-slate-400">Bei „Ja“ wird die Anzahl um {parseQty(cardQuantity)} auf ×{qtyOf(dupPrompt) + parseQty(cardQuantity)} erhöht, statt einen neuen Eintrag anzulegen.</p>
+            <div className="flex flex-col gap-2 pt-1">
+              <button onClick={() => { const d = dupPrompt; setDupPrompt(null); addToCollection(false, d); }} className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-2.5 rounded-xl font-black text-sm">Ja, +{parseQty(cardQuantity)} (Anzahl erhöhen)</button>
+              <button onClick={() => { setDupPrompt(null); addToCollection(true); }} className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl font-bold text-sm">Nein, separaten Eintrag anlegen</button>
+              <button onClick={() => setDupPrompt(null)} className="text-xs text-slate-400 hover:text-slate-200 py-1">Abbrechen</button>
             </div>
           </div>
         </div>

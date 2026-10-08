@@ -1,6 +1,6 @@
 // Karten-Scanner (Backend: POST /api/scan-genai).
 // Passt zu den Aufrufen in App.jsx:
-//   <CardScanner mode="collection"|"search" onClose onResult onSearch onPick Img owned api series onSeriesChange />
+//   <CardScanner mode="collection"|"search" onClose onResult onSearch onPick Img owned api series onSeriesChange history onUndo />
 // Exportiert außerdem readCard + loadImageSource für BatchScanner.jsx.
 import React, { useState, useRef, useEffect } from 'react';
 import { buildQuery } from './scanParse';
@@ -79,9 +79,52 @@ function shrinkToCanvas(source, w, h, maxSide = 900) {
 }
 
 // ==========================================
+// Scan-Verlauf mit „Rückgängig“ (auch in App.jsx unter der Collection genutzt)
+// ==========================================
+const hhmm = (ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+export function ScanHistory({ history = [], onUndo, onClear, Img, compact = false }) {
+  const [busyId, setBusyId] = useState(null);
+  if (!history.length || !onUndo) return null;
+  const Pic = Img || 'img';
+
+  const undo = async (entry) => {
+    if (busyId) return;
+    setBusyId(entry.docId);
+    try { await onUndo(entry); } finally { setBusyId(null); }
+  };
+
+  return (
+    <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-bold text-amber-300">🕘 Zuletzt gescannt ({history.length})</h3>
+        {onClear && !compact && <button onClick={onClear} className="text-[11px] text-slate-400 hover:text-slate-200 underline">Liste leeren</button>}
+      </div>
+      <ul className="space-y-1.5">
+        {history.slice(0, compact ? 5 : 30).map((h) => (
+          <li key={h.docId} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg p-1.5">
+            <Pic src={h.image} alt={h.name} className="w-8 rounded shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-200 truncate">{h.name}{h.number ? <span className="text-slate-500 font-normal"> #{h.number}</span> : null}</p>
+              <p className="text-[10px] text-slate-500 truncate">{h.set || 'Unbekanntes Set'} · {h.condition}{h.variant && h.variant !== 'normal' ? ` · ${h.variant === 'reverse' ? 'Reverse Holo' : h.variant === 'holo' ? 'Holo' : h.variant}` : ''} · {hhmm(h.at)}</p>
+            </div>
+            <button
+              onClick={() => undo(h)}
+              disabled={!!busyId}
+              className="shrink-0 text-[11px] font-black px-2.5 py-1 rounded-lg border bg-slate-900 text-rose-300 border-rose-500/40 hover:bg-rose-500 hover:text-slate-950 disabled:opacity-50"
+            >{busyId === h.docId ? '…' : '↩ Rückgängig'}</button>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] text-slate-500">Rückgängig löscht den Eintrag wieder aus der Collection{compact ? '' : ' (stammt die Karte von der Watchlist, kommt sie dorthin zurück)'}.</p>
+    </div>
+  );
+}
+
+// ==========================================
 // Komponente
 // ==========================================
-export default function CardScanner({ mode = 'collection', onClose, onResult, onSearch, onPick, Img, owned, api = API_URL, series = false, onSeriesChange }) {
+export default function CardScanner({ mode = 'collection', onClose, onResult, onSearch, onPick, Img, owned, api = API_URL, series = false, onSeriesChange, history = [], onUndo }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
@@ -90,6 +133,8 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
   const [name, setName] = useState('');
   const [number, setNumber] = useState('');
   const [meta, setMeta] = useState({ set: '', language: '' });
+  const [variant, setVariant] = useState('');          // erkannte/gewählte Variante ('' = unbekannt)
+  const [variantAuto, setVariantAuto] = useState(false); // true = vom Modell vorgeschlagen, nicht bestätigt
   const [cards, setCards] = useState([]);
   const [scores, setScores] = useState({});
   const canvasRef = useRef(null);
@@ -126,6 +171,8 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
       setName(ai.name || '');
       setNumber(ai.number || '');
       setMeta({ set: ai.set || '', language: ai.language || '' });
+      setVariant(ai.variant || '');
+      setVariantAuto(!!ai.variant);
 
       let list = Array.isArray(data.results) ? data.results : [];
       if (list.length === 0 && ai.name && onSearch) {
@@ -250,6 +297,21 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
                       {meta.language ? `Sprache: ${LANG_LABEL[meta.language] || meta.language}` : ''}{meta.language && meta.set ? ' · ' : ''}{meta.set ? `Set: ${meta.set}` : ''}
                     </p>
                   )}
+                  {mode === 'collection' && (
+                    <div>
+                      <select
+                        value={variant}
+                        onChange={(e) => { setVariant(e.target.value); setVariantAuto(false); }}
+                        className={inputCls}
+                      >
+                        <option value="">Variante: Standard</option>
+                        <option value="normal">Normal</option>
+                        <option value="reverse">Reverse Holo</option>
+                        <option value="holo">Holo</option>
+                      </select>
+                      {variantAuto && variant && <p className="text-[10px] text-amber-300 mt-0.5">Automatisch erkannt – bitte prüfen. Wird nur übernommen, wenn es die Variante für die Karte gibt.</p>}
+                    </div>
+                  )}
                   <button onClick={research} disabled={busy || !name.trim()} className="text-[11px] font-bold text-cyan-400 hover:underline disabled:opacity-40">Neu suchen</button>
                 </div>
               )}
@@ -270,7 +332,7 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
                 <p className="text-xs font-bold text-slate-200">Treffer ({cards.length}) – Karte antippen zum Hinzufügen</p>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                   {cards.slice(0, 12).map((card) => (
-                    <button key={card.id} onClick={() => onPick && onPick(card)} className="text-left bg-slate-900 border border-slate-800 hover:border-cyan-500 rounded-xl p-2 space-y-1 transition-colors">
+                    <button key={card.id} onClick={() => onPick && onPick(card, mode === 'collection' ? (variant || null) : null, variantAuto)} className="text-left bg-slate-900 border border-slate-800 hover:border-cyan-500 rounded-xl p-2 space-y-1 transition-colors">
                       {Img
                         ? <Img src={card.images && card.images.small} alt={card.name} className="w-full rounded-lg" />
                         : <img src={card.images && card.images.small} alt={card.name} className="w-full rounded-lg" />}
@@ -287,6 +349,8 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
               </div>
             )
           )}
+
+          {mode === 'collection' && <ScanHistory history={history} onUndo={onUndo} Img={Img} compact />}
         </div>
       </div>
     </div>

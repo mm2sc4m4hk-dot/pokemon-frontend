@@ -8,6 +8,20 @@ import { rankByImage } from './imageMatch';
 import { watchPrice } from './priceData';
 import { OwnedBadge } from './Backup';
 
+const VARIANT_LABEL = { normal: 'Normal', reverse: 'Reverse Holo', holo: 'Holo', firstEdition: '1st Edition' };
+// Welche Varianten gibt es für die Karte? (TCGdex-Flags; ohne Angabe nur Normal)
+const availKeys = (card) => {
+  const f = card && card.variants;
+  if (!f) return ['normal'];
+  const keys = Object.keys(VARIANT_LABEL).filter((k) => f[k]);
+  return keys.length ? keys : ['normal'];
+};
+// Gewünschte (erkannte oder gewählte) Variante, falls es sie gibt – sonst die erste verfügbare
+const effVariant = (c, card) => {
+  const keys = availKeys(card);
+  return c.variant && keys.includes(c.variant) ? c.variant : keys[0];
+};
+
 const plain = (n) => String(n || '').replace(/\s*\[.*\]\s*$/, '');
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 
@@ -107,7 +121,7 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
     setError('');
     setStep('review');
     setRunning(true);
-    setCells(rects.map((_, i) => ({ idx: i, status: 'wait', name: '', number: '', thumb: '', cards: [], scores: {}, sel: -1, include: false })));
+    setCells(rects.map((_, i) => ({ idx: i, status: 'wait', name: '', number: '', thumb: '', cards: [], scores: {}, sel: -1, include: false, variant: '', vAuto: false })));
     
     try {
       for (let i = 0; i < rects.length; i += 1) {
@@ -122,11 +136,13 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
         let foundCards = [];
         let scores = {};
         let status = 'none';
+        let variant = '';
 
         try {
           const scanResult = await readCard(base64Image);
           name = scanResult.aiAnalysis?.name || '';
           number = scanResult.aiAnalysis?.number || '';
+          variant = scanResult.aiAnalysis?.variant || '';
           foundCards = scanResult.results || [];
 
           // Fallback-Suche, falls Backend-Ergebnis leer ist, aber ein Name/Nummer erkannt wurde
@@ -150,7 +166,9 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
           cards: foundCards,
           scores,
           sel: foundCards.length ? 0 : -1,
-          include: foundCards.length > 0
+          include: foundCards.length > 0,
+          variant,
+          vAuto: !!variant
         });
       }
     } catch (e) {
@@ -177,14 +195,17 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
     cells.forEach((c) => {
       const card = chosenOf(c);
       if (!c.include || !card) return;
-      const e = picked.get(card.id) || { card, qty: 0 };
+      const variant = effVariant(c, card);
+      const key = `${card.id}|${variant}`;
+      const e = picked.get(key) || { card, qty: 0, variant };
       e.qty += 1;
-      picked.set(card.id, e);
+      picked.set(key, e);
     });
     if (picked.size === 0) return;
     setAdding(true);
     try {
-      await onAdd([...picked.values()], cond, lang);
+      const ok = await onAdd([...picked.values()], cond, lang);
+      if (ok === false) { setAdding(false); return; } // Duplikat-Warnung abgebrochen
       onClose();
     } catch (e) {
       setError('Hinzufügen fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
@@ -304,6 +325,17 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
                           </p>
                         )}
                         {chosen && owned && <OwnedBadge info={owned.get(chosen.id)} />}
+                        {chosen && availKeys(chosen).length > 1 && (() => {
+                          const eff = effVariant(c, chosen);
+                          return (
+                            <div>
+                              <select value={eff} onChange={(e) => patch(i, { variant: e.target.value, vAuto: false })} className={inputCls}>
+                                {availKeys(chosen).map((k) => <option key={k} value={k}>{VARIANT_LABEL[k]}</option>)}
+                              </select>
+                              {c.vAuto && c.variant === eff && <p className="text-[9px] text-amber-300 mt-0.5">automatisch erkannt – bitte prüfen</p>}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div className="flex items-center justify-between gap-2">
@@ -342,7 +374,7 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
               {adding ? '⏳ Speichere …' : `➕ ${count} Karten zur Collection`}
             </button>
           </div>
-          <p className="text-[10px] text-slate-500 text-center">Zustand und Sprache gelten für alle Karten dieses Fotos. Variante und Preis werden automatisch gesetzt und lassen sich später in der Collection bearbeiten.</p>
+          <p className="text-[10px] text-slate-500 text-center">Zustand und Sprache gelten für alle Karten dieses Fotos. Die Variante ist ein Vorschlag aus dem Foto (bitte prüfen), der Preis wird automatisch gesetzt. Beides lässt sich später in der Collection bearbeiten.</p>
         </div>
       )}
     </div>
