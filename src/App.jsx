@@ -851,6 +851,22 @@ useEffect(() => {
     && (c.userVariant || 'normal') === variant
     && gradeKey(c.userGrade) === gradeKey(grade));
 
+  // Abbrechen in der Duplikat-Warnung: Kam die Karte aus dem Scanner, wird alles geschlossen (kein Hinzufügen-Fenster).
+  // Bei anderen Wegen (Suche, Watchlist …) bleibt das Fenster offen, damit man Zustand/Sprache noch ändern kann.
+  const cancelDup = () => {
+    setDupPrompt(null);
+    if (!scanFlowRef.current) return;
+    const again = scanSeries && activeTab === 'collection';
+    scanFlowRef.current = false;
+    setVariantAuto(false);
+    setModalType(null);
+    setMoveFromWatchlistId(null);
+    setEditOriginalPrice('');
+    setCustomPrice('');
+    setCustomImage('');
+    if (again) setTimeout(() => setScanOpen('collection'), 400);
+  };
+
   // forceNew === true: bewusst neuer Eintrag (Warnung mit „Nein“ beantwortet)
   // mergeInto: vorhandener Eintrag, dessen Anzahl erhöht wird („Ja, +1“)
   const addToCollection = async (forceNew = false, mergeInto = null) => {
@@ -2513,7 +2529,7 @@ useEffect(() => {
             <div className="flex flex-col gap-2 pt-1">
               <button onClick={() => { const d = dupPrompt; setDupPrompt(null); addToCollection(false, d); }} className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 py-2.5 rounded-xl font-black text-sm">Ja, +{parseQty(cardQuantity)} (Anzahl erhöhen)</button>
               <button onClick={() => { setDupPrompt(null); addToCollection(true); }} className="bg-slate-800 hover:bg-slate-700 text-slate-200 py-2.5 rounded-xl font-bold text-sm">Nein, separaten Eintrag anlegen</button>
-              <button onClick={() => setDupPrompt(null)} className="text-xs text-slate-400 hover:text-slate-200 py-1">Abbrechen</button>
+              <button onClick={cancelDup} className="text-xs text-slate-400 hover:text-slate-200 py-1">Abbrechen</button>
             </div>
           </div>
         </div>
