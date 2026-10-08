@@ -1,5 +1,5 @@
 // Batch-Import per Foto: ein Foto einer Binder-Seite (z. B. 3×3) wird in Felder zerlegt,
-// jedes Feld per KI analysiert, gesucht und geprüft.
+// jedes Feld gescannt, gesucht und geprüft.
 // Danach kannst du die Treffer kontrollieren und alle auf einmal in die Collection legen.
 import React, { useState, useRef, useEffect } from 'react';
 import { readCard, loadImageSource } from './CardScanner';
@@ -112,7 +112,7 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
     try {
       for (let i = 0; i < rects.length; i += 1) {
         if (!aliveRef.current) return;
-        setProgress(`Karte ${i + 1} / ${rects.length} wird per KI analysiert …`);
+        setProgress(`Karte ${i + 1} / ${rects.length} wird gescannt …`);
         const canvas = cellCanvas(photo.source, rects[i]);
         canvases.current[i] = canvas;
         const base64Image = canvas.toDataURL('image/jpeg', 0.85);
@@ -129,7 +129,7 @@ export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, condi
           number = scanResult.aiAnalysis?.number || '';
           foundCards = scanResult.results || [];
 
-          // Fallback-Suche, falls Backend-Ergebnis leer ist, aber ein Name/Nummer von KI erkannt wurde
+          // Fallback-Suche, falls Backend-Ergebnis leer ist, aber ein Name/Nummer erkannt wurde
           if (foundCards.length === 0 && (name || number)) {
             const fallback = await lookup(name, number, canvas);
             foundCards = fallback.cards || [];

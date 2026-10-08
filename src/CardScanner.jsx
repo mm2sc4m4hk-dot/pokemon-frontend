@@ -1,4 +1,4 @@
-// Karten-Scanner mit Gemini (Backend: POST /api/scan-genai).
+// Karten-Scanner (Backend: POST /api/scan-genai).
 // Passt zu den Aufrufen in App.jsx:
 //   <CardScanner mode="collection"|"search" onClose onResult onSearch onPick Img owned api series onSeriesChange />
 // Exportiert außerdem readCard + loadImageSource für BatchScanner.jsx.
@@ -31,7 +31,7 @@ export const loadImageSource = (file) =>
     reader.readAsDataURL(file);
   });
 
-// Ein Versuch. Der Server wiederholt bei Überlastung selbst (3.8 -> gemini-2.0-flash).
+// Ein Versuch. Der Server wiederholt bei Überlastung selbst.
 async function readCardOnce(base64Image, api) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90000); // Render-Gratisplan kann schlafen
@@ -44,7 +44,7 @@ async function readCardOnce(base64Image, api) {
     });
     const data = await response.json().catch(() => ({}));
     if (response.status === 429) { const e = new Error('Zu viele Scans auf einmal. Bitte kurz warten.'); e.final = true; throw e; }
-    if (response.status === 503) { const e = new Error('Der KI-Dienst ist gerade sehr gefragt. Bitte warte kurz und scanne erneut.'); e.busy = true; throw e; }
+    if (response.status === 503) { const e = new Error('Der Scan ist gerade ausgelastet. Bitte warte kurz und scanne erneut.'); e.busy = true; throw e; }
     if (!response.ok) { const e = new Error(data.error || `Fehler beim Scannen (Status ${response.status}).`); e.final = true; throw e; }
     return data;
   } catch (e) {
@@ -118,7 +118,7 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
   // Analysiert das aktuelle Foto (auch für „Erneut versuchen“, ohne neu zu fotografieren)
   const analyze = async (dataUrl) => {
     setBusy(true); setError(''); setScanned(false); setCards([]); setScores({});
-    setStatus('KI analysiert die Karte …');
+    setStatus('Karte wird gescannt …');
     try {
       const data = await readCard(dataUrl, api);
       if (!aliveRef.current) return;
@@ -194,14 +194,14 @@ export default function CardScanner({ mode = 'collection', onClose, onResult, on
   return (
     <div className="fixed inset-0 z-[80] bg-slate-950 flex flex-col text-slate-100">
       <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-500/20 bg-slate-900">
-        <h2 className="font-black text-cyan-400 text-sm">📷 Karte scannen (KI)</h2>
+        <h2 className="font-black text-cyan-400 text-sm">📷 Karte scannen</h2>
         <button onClick={onClose} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400">Schließen ✕</button>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
         <div className="max-w-xl mx-auto space-y-4">
           <p className="text-xs text-slate-400">
-            Fotografiere eine einzelne Karte gerade von oben, ohne Blitz-Reflexe. Die KI liest Name und Nummer und sucht die Karte in der Datenbank.
+            Fotografiere eine einzelne Karte gerade von oben, ohne Blitz-Reflexe. Name und Nummer werden erkannt und die Karte wird in der Datenbank gesucht.
           </p>
 
           <div className="grid grid-cols-2 gap-2">
