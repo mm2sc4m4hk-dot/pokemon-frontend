@@ -17,8 +17,6 @@ import {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   linkWithPopup,
   EmailAuthProvider,
   reauthenticateWithCredential,
@@ -64,7 +62,6 @@ const googleProvider = () => {
 };
 
 const IGNORED = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'];
-const REDIRECT_FALLBACK = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'];
 
 const inputCls = 'w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all';
 const smallInputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none';
@@ -81,14 +78,6 @@ export function LoginScreen({ onDone }) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
-
-  // Rückkehr von der Google-Weiterleitung (nur nötig, wenn das Pop-up nicht ging)
-  useEffect(() => {
-    getRedirectResult(auth)
-      .then((r) => { if (r && r.user && onDone) onDone(); })
-      .catch((e) => { if (!IGNORED.includes(e.code)) setError(authErrorMessage(e.code)); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const switchMode = (m) => {
     setMode(m); setError(''); setInfo(''); setPassword(''); setConfirm('');
@@ -156,8 +145,8 @@ export function LoginScreen({ onDone }) {
       await signInWithPopup(auth, provider);
       if (onDone) onDone();
     } catch (err) {
-      if (REDIRECT_FALLBACK.includes(err.code)) {
-        try { await signInWithRedirect(auth, provider); return; } catch (e2) { setError(authErrorMessage(e2.code)); }
+      if (err.code === 'auth/popup-blocked') {
+        setError('Pop-up wurde blockiert. Bitte Pop-ups für diese Seite erlauben und erneut versuchen.');
       } else if (!IGNORED.includes(err.code)) {
         console.error('Google-Anmeldung fehlgeschlagen:', err.code, err.message);
         setError(authErrorMessage(err.code));
