@@ -18,7 +18,7 @@ import { initializeFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyA9vq-yuzUcR9yxaDwxIjhzrCqlf4_-q-A",
-  authDomain: "pokemon-signin.firebaseapp.com",
+  authDomain: typeof window !== 'undefined' ? window.location.host : "pokemon-signin.firebaseapp.com",
   projectId: "pokemon-signin",
   storageBucket: "pokemon-signin.firebasestorage.app",
   messagingSenderId: "459900531776",

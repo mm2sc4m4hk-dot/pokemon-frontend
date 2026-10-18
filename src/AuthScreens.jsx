@@ -17,6 +17,8 @@ import {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   linkWithPopup,
   EmailAuthProvider,
   reauthenticateWithCredential,
@@ -62,6 +64,11 @@ const googleProvider = () => {
 };
 
 const IGNORED = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'];
+const POPUP_PROBLEMS = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'];
+
+const isStandalone = () =>
+  (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+  (typeof navigator !== 'undefined' && navigator.standalone === true);
 
 const inputCls = 'w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all';
 const smallInputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none';
@@ -78,6 +85,13 @@ export function LoginScreen({ onDone }) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Fehler nach der Rückkehr vom Redirect anzeigen
+  useEffect(() => {
+    getRedirectResult(auth).catch((err) => {
+      if (!IGNORED.includes(err.code)) setError(authErrorMessage(err.code));
+    });
+  }, []);
 
   const switchMode = (m) => {
     setMode(m); setError(''); setInfo(''); setPassword(''); setConfirm('');
@@ -141,34 +155,31 @@ export function LoginScreen({ onDone }) {
     if (busy) return;
     setError(''); setInfo(''); setBusy(true);
     const provider = googleProvider();
-    let lastErr = null;
-    // Popup-Blocker melden fälschlicherweise "popup-blocked", obwohl nichts blockiert ist.
-    // Deshalb einmal wiederholen, bevor wir dem Nutzer eine Fehlermeldung zeigen.
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        await signInWithPopup(auth, provider);
-        if (onDone) onDone();
+    try {
+      // Installierte App: gleich Redirect, Popups gehen dort nicht zuverlässig
+      if (isStandalone()) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
+      await signInWithPopup(auth, provider);
+      if (onDone) onDone();
+    } catch (err) {
+      if (IGNORED.includes(err.code)) {
         setBusy(false);
         return;
-      } catch (err) {
-        lastErr = err;
-        if (IGNORED.includes(err.code)) {
-          // Nutzer hat Pop-up geschlossen – kein Fehler, nicht wiederholen
+      }
+      if (POPUP_PROBLEMS.includes(err.code)) {
+        try {
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch (e2) {
+          setError(authErrorMessage(e2.code));
           setBusy(false);
           return;
         }
-        if (err.code !== 'auth/popup-blocked') break; // anderer Fehler -> nicht wiederholen
-        // Kurze Pause vor Wiederholung, damit sich das Browser-Fenster beruhigt
-        await new Promise(r => setTimeout(r, 800));
       }
-    }
-    // Alle Versuche gescheitert
-    if (lastErr && lastErr.code === 'auth/popup-blocked') {
-      setError('Pop-up wurde blockiert. Bitte Pop-ups für diese Seite erlauben und erneut versuchen.');
-    } else if (lastErr) {
-      console.error('Google-Anmeldung fehlgeschlagen:', lastErr.code, lastErr.message);
-      setError(authErrorMessage(lastErr.code));
-    } else {
+      console.error('Google-Anmeldung fehlgeschlagen:', err.code, err.message);
+      setError(authErrorMessage(err.code));
       setBusy(false);
     }
   };
