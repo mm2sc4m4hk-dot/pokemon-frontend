@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { toCsv, parseCsv, downloadText } from './csvTools';
+import { BRAND_NAME, Disclaimer } from './brand';
 
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const plain = (name) => String(name || '').replace(/\s*\[.*\]\s*$/, '');
@@ -391,7 +392,7 @@ export function SharedView({ token, Img }) {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
       <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between">
-        <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ PokéTracker</span>
+        <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ {BRAND_NAME}</span>
         <a href={window.location.origin} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-cyan-400">Zur App</a>
       </header>
       <main className="max-w-4xl mx-auto p-4 space-y-4">
@@ -477,6 +478,7 @@ export function SharedView({ token, Img }) {
             )}
           </>
         )}
+        <Disclaimer className="pt-6 pb-4" />
       </main>
     </div>
   );
@@ -575,7 +577,7 @@ export function BackupPanel({ collection, watchlist, api, conditions, languages,
       });
     });
     if (rows.length === 0) { setMsg('Es gibt noch nichts zu exportieren.'); return; }
-    downloadText(`poketracker-backup-${today()}.csv`, toCsv(rows, COLS));
+    downloadText(`${BRAND_NAME.toLowerCase().replace(/\s+/g, '-')}-backup-${today()}.csv`, toCsv(rows, COLS));
     setMsg(`${collection.length} Collection-Einträge und ${watchlist.length} Watchlist-Karten exportiert. Eigene Fotos sind nicht enthalten.`);
   };
 

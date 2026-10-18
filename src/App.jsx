@@ -1,11 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  onAuthStateChanged,
-  signOut,
-  updateProfile
-} from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
   collection as fsCollection,
   doc,
@@ -17,6 +11,8 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
+import { BRAND_NAME, Disclaimer } from './brand';
+import { LoginScreen, LegacyUpgradeBanner, AccountPanel } from './AuthScreens';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
 import { CardHistoryChart, WeeklyMovers, PushToggle, OutlierBadge } from './Insights';
@@ -50,9 +46,6 @@ const CONDITIONS = [
   { name: 'Played', factor: 0.35, label: 'Played (-65%)' },
   { name: 'Poor', factor: 0.15, label: 'Poor (Beschädigt, -85%)' }
 ];
-
-const CHEAPEST_LANG = LANGUAGES.reduce((a, b) => (a.factor < b.factor ? a : b));
-const PREMIUM_LANG = LANGUAGES.reduce((a, b) => (a.factor > b.factor ? a : b));
 
 const VARIANTS = [
   { key: 'normal', label: 'Normal', holo: false },
@@ -90,23 +83,6 @@ const gradeFactor = (g) => {
 const gradeLabel = (g) => (g && g.company && g.grade ? `${g.company} ${g.grade}` : '');
 const makeGrade = (company, grade) => (company && grade ? { company, grade } : null);
 const gradeKey = (g) => (g && g.company && g.grade ? `${g.company}|${g.grade}` : '');
-
-const usernameToEmail = (username) => `${username.trim().toLowerCase()}@poketracker.local`;
-
-const authErrorMessage = (code) => {
-  switch (code) {
-    case 'auth/email-already-in-use': return 'Dieser Benutzername ist bereits vergeben.';
-    case 'auth/weak-password': return 'Passwort zu kurz (mindestens 6 Zeichen).';
-    case 'auth/invalid-credential':
-    case 'auth/wrong-password': return 'Falsches Passwort.';
-    case 'auth/user-not-found': return 'Diesen Benutzer gibt es noch nicht. Bitte zuerst registrieren.';
-    case 'auth/configuration-not-found':
-    case 'auth/operation-not-allowed': return 'E-Mail/Passwort-Anmeldung ist in Firebase noch nicht aktiviert.';
-    case 'auth/too-many-requests': return 'Zu viele Versuche. Bitte kurz warten und erneut versuchen.';
-    case 'auth/network-request-failed': return 'Keine Verbindung zu Firebase. Internetverbindung prüfen.';
-    default: return 'Etwas ist schiefgelaufen. Bitte erneut versuchen.';
-  }
-};
 
 const qtyOf = (item) => Math.max(1, parseInt(item?.userQuantity, 10) || 1);
 const parseQty = (v) => Math.max(1, parseInt(v, 10) || 1);
@@ -400,12 +376,6 @@ const [batchBusy, setBatchBusy] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentUser, setCurrentUser] = useState('');
-  const [authMode, setAuthMode] = useState('login');
-  const [authUsername, setAuthUsername] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authPasswordConfirm, setAuthPasswordConfirm] = useState('');
-  const [authError, setAuthError] = useState('');
-  const [authBusy, setAuthBusy] = useState(false);
 useEffect(() => {
     if (!batchAddOpen || allSets.length > 0) return;
     fetch(`${API_URL}/api/sets-list`)
@@ -661,64 +631,8 @@ useEffect(() => {
     };
   }, []);
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setAuthError('');
-    const uname = authUsername.trim();
-    if (!uname || !authPassword) {
-      setAuthError('Bitte Benutzername und Passwort eingeben.');
-      return;
-    }
-    setAuthBusy(true);
-    try {
-      await signInWithEmailAndPassword(auth, usernameToEmail(uname), authPassword);
-      setActiveTab('profile');
-    } catch (err) {
-      console.error('Firebase Auth Fehler:', err.code, err.message);
-      setAuthError(authErrorMessage(err.code));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
-  const handleRegister = async (e) => {
-    e.preventDefault();
-    setAuthError('');
-    const uname = authUsername.trim();
-    if (!uname || !authPassword || !authPasswordConfirm) {
-      setAuthError('Bitte alle Felder ausfüllen.');
-      return;
-    }
-    if (!/^[A-Za-z0-9._-]{3,30}$/.test(uname)) {
-      setAuthError('Benutzername: 3–30 Zeichen, nur Buchstaben, Zahlen, Punkt, Unterstrich und Bindestrich.');
-      return;
-    }
-    if (authPassword !== authPasswordConfirm) {
-      setAuthError('Die Passwörter stimmen nicht überein.');
-      return;
-    }
-    setAuthBusy(true);
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, usernameToEmail(uname), authPassword);
-      await updateProfile(cred.user, { displayName: uname });
-      setActiveTab('profile');
-    } catch (err) {
-      console.error('Firebase Auth Fehler:', err.code, err.message);
-      setAuthError(authErrorMessage(err.code));
-    } finally {
-      setAuthBusy(false);
-    }
-  };
-
   const handleLogout = () => {
     signOut(auth);
-  };
-
-  const switchAuthMode = (mode) => {
-    setAuthMode(mode);
-    setAuthError('');
-    setAuthPassword('');
-    setAuthPasswordConfirm('');
   };
 
   const calculatePrice = (card, conditionName, langName, variantKey = 'normal', grade = null) => {
@@ -1611,71 +1525,7 @@ useEffect(() => {
   }
 
   if (!isAuthenticated) {
-    const isRegister = authMode === 'register';
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 font-sans text-slate-100">
-        <div className="bg-slate-900 border border-cyan-500/30 p-8 rounded-2xl w-full max-w-md shadow-2xl">
-          <div className="text-center mb-8">
-            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-teal-400 tracking-wider mb-2">PokéTracker</h1>
-            <p className="text-slate-400 text-sm">Verwalte deine Sammlung & Werte</p>
-          </div>
-
-          <h2 className="text-xl font-bold text-slate-200 mb-4">{isRegister ? 'Sign up' : 'Login'}</h2>
-
-          <form onSubmit={isRegister ? handleRegister : handleLogin} className="space-y-4">
-            <div>
-              <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Benutzername</label>
-              <input
-                type="text"
-                required
-                value={authUsername}
-                onChange={e => setAuthUsername(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all"
-                placeholder="Dein Benutzername"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Passwort</label>
-              <input
-                type="password"
-                required
-                value={authPassword}
-                onChange={e => setAuthPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all"
-                placeholder="••••••••"
-              />
-            </div>
-            {isRegister && (
-              <div>
-                <label className="text-xs text-cyan-400 font-bold ml-1 mb-1 block">Passwort bestätigen</label>
-                <input
-                  type="password"
-                  required
-                  value={authPasswordConfirm}
-                  onChange={e => setAuthPasswordConfirm(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all"
-                  placeholder="••••••••"
-                />
-              </div>
-            )}
-
-            {authError && <p className="text-rose-400 text-sm text-center">{authError}</p>}
-
-            <button type="submit" disabled={authBusy} className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-black text-lg py-3 rounded-xl transition-all shadow-lg mt-4">
-              {authBusy ? 'Bitte warten...' : isRegister ? 'Account erstellen' : 'Anmelden'}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center text-sm text-slate-400">
-            {isRegister ? (
-              <p>Bereits einen Account? <button onClick={() => switchAuthMode('login')} className="text-cyan-400 font-bold hover:underline">Hier anmelden</button></p>
-            ) : (
-              <p>Noch keinen Account? <button onClick={() => switchAuthMode('register')} className="text-cyan-400 font-bold hover:underline">Hier registrieren</button></p>
-            )}
-          </div>
-        </div>
-      </div>
-    );
+    return <LoginScreen onDone={() => setActiveTab('profile')} />;
   }
 
   return (
@@ -1687,7 +1537,7 @@ useEffect(() => {
       )}
 
       <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between shadow-md">
-        <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ PokéTracker</span>
+        <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ {BRAND_NAME}</span>
         <div className="flex items-center gap-3">
           <span className="text-xs text-slate-400 hidden sm:inline">{currentUser}</span>
           <button onClick={handleLogout} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 transition-colors">Abmelden</button>
@@ -1697,6 +1547,7 @@ useEffect(() => {
       <main className="max-w-4xl mx-auto p-4">
         {activeTab === 'profile' && (
           <div className="space-y-6 fade-in">
+            <LegacyUpgradeBanner />
             <NewSetsBanner api={API_URL} watchIds={watchlistIds} uid={auth.currentUser?.uid} Img={CardImage} />
             {dealCount > 0 && (
               <button onClick={() => setActiveTab('watchlist')} className="w-full text-left bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-3 text-sm text-emerald-300 hover:bg-emerald-500/20 transition-colors">
@@ -1776,6 +1627,8 @@ useEffect(() => {
               isAutoPrice={isAutoPrice}
               onEdit={openEditCard}
             />
+
+            <AccountPanel />
 
             <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} api={API_URL} />
             <BackupPanel
@@ -2275,6 +2128,7 @@ useEffect(() => {
             </div>
           </div>
         )}
+        <Disclaimer className="mt-8 mb-2 px-4" />
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-cyan-500/20 px-6 py-2 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">

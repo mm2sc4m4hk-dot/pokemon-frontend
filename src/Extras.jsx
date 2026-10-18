@@ -17,6 +17,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { MissingCost } from './Insights';
+import { BRAND_NAME } from './brand';
  
 // ---------------------------------------------------------------------
 // Kleine Helfer
@@ -25,15 +26,6 @@ const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const pad = (n) => String(n).padStart(3, '0');
 const plain = (name) => String(name || '').replace(/\s*\[.*\]\s*$/, '');
 const spriteUrl = (id) => `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${id}.png`;
- 
-// Set-Namen-Normalisierung für Zusatzsuche
-const normSetName = (s) => {
-  const q = String(s || '').toLowerCase().trim();
-  if (!q) return '';
-  if (q.includes('30 jahre') || q.includes('30th') || q.includes('30 j') || q === '30') return '30th anniversary';
-  if (q.includes('25 jahre') || q.includes('25th') || q.includes('celebrations')) return 'celebrations';
-  return q;
-};
  
 // Filtertext -> mehrere mögliche Schreibweisen (deutsch/englisch)
 function makeMatcher(query) {
@@ -965,7 +957,7 @@ async function renderBinderPage({ api, b, pageIdx, per, used, slots, isDex, owne
   });
  
   ctx.fillStyle = '#475569'; ctx.font = '500 13px system-ui, sans-serif';
-  ctx.fillText(`PokéTracker · ${new Date().toLocaleDateString('de-DE')}`, PAD, H - PAD + 4);
+  ctx.fillText(`${BRAND_NAME} · ${new Date().toLocaleDateString('de-DE')}`, PAD, H - PAD + 4);
  
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'));
 }

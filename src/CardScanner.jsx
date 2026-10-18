@@ -7,6 +7,7 @@ import { buildQuery } from './scanParse';
 import { rankByImage } from './imageMatch';
 import { watchPrice } from './priceData';
 import { OwnedBadge } from './Backup';
+import { auth } from './firebase';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
@@ -36,13 +37,20 @@ async function readCardOnce(base64Image, api) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90000); // Render-Gratisplan kann schlafen
   try {
+    const user = auth.currentUser;
+    if (!user) { const e = new Error('Bitte melde dich an, um zu scannen.'); e.final = true; throw e; }
+    let token;
+    try { token = await user.getIdToken(); } catch (err) {
+      const e = new Error('Die Anmeldung konnte nicht erneuert werden. Internet prüfen oder neu anmelden.'); e.busy = true; throw e;
+    }
     const response = await fetch(`${api}/api/scan-genai`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       signal: controller.signal,
       body: JSON.stringify({ image: base64Image })
     });
     const data = await response.json().catch(() => ({}));
+    if (response.status === 401) { const e = new Error('Anmeldung abgelaufen oder ungültig. Bitte neu anmelden.'); e.final = true; throw e; }
     if (response.status === 429) { const e = new Error('Zu viele Scans auf einmal. Bitte kurz warten.'); e.final = true; throw e; }
     if (response.status === 503) { const e = new Error('Der Scan ist gerade ausgelastet. Bitte warte kurz und scanne erneut.'); e.busy = true; throw e; }
     if (!response.ok) { const e = new Error(data.error || `Fehler beim Scannen (Status ${response.status}).`); e.final = true; throw e; }

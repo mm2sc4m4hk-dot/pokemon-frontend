@@ -27,5 +27,6 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+auth.languageCode = 'de'; // Mails (Passwort zurücksetzen, Bestätigung) auf Deutsch
 // undefined-Felder werden ignoriert statt den ganzen Schreibvorgang abzulehnen
 export const db = initializeFirestore(app, { ignoreUndefinedProperties: true });
