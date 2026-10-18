@@ -141,17 +141,34 @@ export function LoginScreen({ onDone }) {
     if (busy) return;
     setError(''); setInfo(''); setBusy(true);
     const provider = googleProvider();
-    try {
-      await signInWithPopup(auth, provider);
-      if (onDone) onDone();
-    } catch (err) {
-      if (err.code === 'auth/popup-blocked') {
-        setError('Pop-up wurde blockiert. Bitte Pop-ups für diese Seite erlauben und erneut versuchen.');
-      } else if (!IGNORED.includes(err.code)) {
-        console.error('Google-Anmeldung fehlgeschlagen:', err.code, err.message);
-        setError(authErrorMessage(err.code));
+    let lastErr = null;
+    // Popup-Blocker melden fälschlicherweise "popup-blocked", obwohl nichts blockiert ist.
+    // Deshalb einmal wiederholen, bevor wir dem Nutzer eine Fehlermeldung zeigen.
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await signInWithPopup(auth, provider);
+        if (onDone) onDone();
+        setBusy(false);
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (IGNORED.includes(err.code)) {
+          // Nutzer hat Pop-up geschlossen – kein Fehler, nicht wiederholen
+          setBusy(false);
+          return;
+        }
+        if (err.code !== 'auth/popup-blocked') break; // anderer Fehler -> nicht wiederholen
+        // Kurze Pause vor Wiederholung, damit sich das Browser-Fenster beruhigt
+        await new Promise(r => setTimeout(r, 800));
       }
-    } finally {
+    }
+    // Alle Versuche gescheitert
+    if (lastErr && lastErr.code === 'auth/popup-blocked') {
+      setError('Pop-up wurde blockiert. Bitte Pop-ups für diese Seite erlauben und erneut versuchen.');
+    } else if (lastErr) {
+      console.error('Google-Anmeldung fehlgeschlagen:', lastErr.code, lastErr.message);
+      setError(authErrorMessage(lastErr.code));
+    } else {
       setBusy(false);
     }
   };
