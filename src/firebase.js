@@ -1,16 +1,11 @@
-// Firebase-Konfiguration für PokéTracker.
+// Firebase-Konfiguration für TCG Vault.
+// Anmeldung: E-Mail/Passwort und Google (siehe AuthScreens.jsx). Die Daten liegen unter users/{uid}/... in Firestore,
+// die Regeln stehen in firestore.rules (Firebase Console -> Firestore -> Regeln).
 //
-// So bekommst du deine eigenen Werte (kostenlos):
-// 1. https://console.firebase.google.com öffnen -> "Projekt hinzufügen"
-// 2. Im Projekt: Symbol "</>" (Web-App hinzufügen) -> App registrieren
-// 3. Firebase zeigt dir ein Objekt "firebaseConfig" -> genau das hier unten einfügen
-// 4. Im Firebase-Menü links: "Authentication" -> "Sign-in method" ->
-//    "E-Mail/Passwort" aktivieren (das nutzen wir intern, auch wenn die
-//    App den Nutzer nur nach einem Benutzernamen fragt, siehe App.jsx)
-// 5. Im Firebase-Menü links: "Firestore Database" -> "Datenbank erstellen"
-//    (Produktivmodus reicht, die Regeln unten machen es sicher)
-// 6. Die Datei firestore.rules mit den Regeln aus diesem Projekt in der
-//    Firebase Console unter Firestore -> "Regeln" einfügen und veröffentlichen
+// authDomain steht fest auf der Produktions-Domain (Google-Login per Redirect). Dafür nötig:
+//  - vercel.json mit den Rewrites für /__/auth/ und /__/firebase/
+//  - Google Cloud Console -> OAuth-Client: Weiterleitungs-URI https://pokemon-frontend-blond.vercel.app/__/auth/handler
+//  - Firebase Console -> Authentication -> Authorized domains: pokemon-frontend-blond.vercel.app
 
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
@@ -18,7 +13,7 @@ import { initializeFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyA9vq-yuzUcR9yxaDwxIjhzrCqlf4_-q-A",
-  authDomain: typeof window !== 'undefined' ? window.location.host : "pokemon-signin.firebaseapp.com",
+  authDomain: "pokemon-frontend-blond.vercel.app",
   projectId: "pokemon-signin",
   storageBucket: "pokemon-signin.firebasestorage.app",
   messagingSenderId: "459900531776",

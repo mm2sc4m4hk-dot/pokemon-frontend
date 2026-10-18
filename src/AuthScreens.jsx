@@ -1,4 +1,4 @@
-// Echtes Login für PokéTracker (Firebase Authentication):
+// Echtes Login für TCG Vault (Firebase Authentication):
 //   LoginScreen         – Anmelden, Registrieren, Passwort vergessen, Google
 //   LegacyUpgradeBanner – nur für Altkonten (benutzername@poketracker.local): Konto sichern
 //   AccountPanel        – Konto-Karte im Profil (E-Mail, Bestätigung, Google verknüpfen, Passwort ändern)
@@ -20,6 +20,7 @@ import {
   signInWithRedirect,
   getRedirectResult,
   linkWithPopup,
+  linkWithRedirect,
   EmailAuthProvider,
   reauthenticateWithCredential,
   verifyBeforeUpdateEmail
@@ -303,8 +304,27 @@ export function LoginScreen({ onDone }) {
 // ---------------------------------------------------------------------
 // Google mit dem aktuellen Konto verknüpfen (uid und Daten bleiben gleich)
 // ---------------------------------------------------------------------
+// Popup zuerst; geht das nicht (installierte App, Blocker), dann Redirect. Nach dem Redirect lädt die Seite neu,
+// das Ergebnis holt der useEffect mit getRedirectResult in den Komponenten unten ab.
 async function linkGoogle(user) {
-  await linkWithPopup(user, googleProvider());
+  const provider = googleProvider();
+  if (isStandalone()) { await linkWithRedirect(user, provider); return; }
+  try {
+    await linkWithPopup(user, provider);
+  } catch (err) {
+    if (POPUP_PROBLEMS.includes(err.code)) { await linkWithRedirect(user, provider); return; }
+    throw err;
+  }
+}
+
+// Meldung nach der Rückkehr von einem Google-Redirect (Verknüpfung)
+function useRedirectMessage(setMsg, okText) {
+  useEffect(() => {
+    getRedirectResult(auth)
+      .then((res) => { if (res && res.operationType === 'link') setMsg({ type: 'ok', text: okText }); })
+      .catch((err) => { if (!IGNORED.includes(err.code)) setMsg({ type: 'err', text: authErrorMessage(err.code) }); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 }
 
 // ---------------------------------------------------------------------
@@ -317,6 +337,7 @@ export function LegacyUpgradeBanner() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ type: '', text: '' });
   const [, rerender] = useState(0);
+  useRedirectMessage(setMsg, 'Google ist verknüpft. Ab jetzt kannst du dich mit „Mit Google anmelden“ einloggen – deine Daten bleiben erhalten.');
 
   if (!isLegacyUser(user)) return null;
   const hasGoogle = user.providerData.some((p) => p.providerId === 'google.com');
@@ -390,6 +411,7 @@ export function AccountPanel() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ type: '', text: '' });
   const [, rerender] = useState(0);
+  useRedirectMessage(setMsg, 'Google ist verknüpft.');
 
   if (!user || isLegacyUser(user)) return null;
   const hasGoogle = user.providerData.some((p) => p.providerId === 'google.com');
