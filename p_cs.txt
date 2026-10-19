@@ -1,0 +1,134 @@
+67: // Mit einer automatischen Wiederholung (nach 3 s) bei Überlastung/Netzfehler
+68: export const readCard = async (base64Image, api = API_URL, { retries = 1 } = {}) => {
+69:   for (let attempt = 0; ; attempt += 1) {
+70:     try {
+71:       return await readCardOnce(base64Image, api);
+72:     } catch (e) {
+73:       if (!e.busy || attempt >= retries) throw e;
+74:       await sleep(3000);
+75:     }
+76:   }
+77: };
+78: 
+79: // Foto verkleinern (schneller Upload, unter dem 10-MB-Limit des Servers)
+80: function shrinkToCanvas(source, w, h, maxSide = 900) {
+81:   const scale = Math.min(1, maxSide / Math.max(w, h));
+82:   const c = document.createElement('canvas');
+83:   c.width = Math.round(w * scale);
+84:   c.height = Math.round(h * scale);
+85:   c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+86:   return c;
+87: }
+88: 
+89: // ==========================================
+90: // Scan-Verlauf mit „Rückgängig“ (auch in App.jsx unter der Collection genutzt)
+91: // ==========================================
+92: const hhmm = (ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+93: 
+94: export function ScanHistory({ history = [], onUndo, onClear, Img, compact = false }) {
+95:   const [busyId, setBusyId] = useState(null);
+96:   if (!history.length || !onUndo) return null;
+97:   const Pic = Img || 'img';
+98: 
+99:   const undo = async (entry) => {
+100:     if (busyId) return;
+101:     setBusyId(entry.docId);
+102:     try { await onUndo(entry); } finally { setBusyId(null); }
+103:   };
+104: 
+105:   return (
+106:     <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 space-y-2">
+107:       <div className="flex items-center justify-between gap-2">
+108:         <h3 className="text-xs font-bold text-amber-300">🕘 Zuletzt gescannt ({history.length})</h3>
+109:         {onClear && !compact && <button onClick={onClear} className="text-[11px] text-slate-400 hover:text-slate-200 underline">Liste leeren</button>}
+110:       </div>
+111:       <ul className="space-y-1.5">
+112:         {history.slice(0, compact ? 5 : 30).map((h) => (
+113:           <li key={h.docId} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg p-1.5">
+114:             <Pic src={h.image} alt={h.name} className="w-8 rounded shrink-0" />
+115:             <div className="min-w-0 flex-1">
+116:               <p className="text-xs font-bold text-slate-200 truncate">{h.name}{h.number ? <span className="text-slate-500 font-normal"> #{h.number}</span> : null}</p>
+117:               <p className="text-[10px] text-slate-500 truncate">{h.set || 'Unbekanntes Set'} · {h.condition}{h.variant && h.variant !== 'normal' ? ` · ${h.variant === 'reverse' ? 'Reverse Holo' : h.variant === 'holo' ? 'Holo' : h.variant}` : ''} · {hhmm(h.at)}</p>
+118:             </div>
+119:             <button
+120:               onClick={() => undo(h)}
+121:               disabled={!!busyId}
+122:               className="shrink-0 text-[11px] font-black px-2.5 py-1 rounded-lg border bg-slate-900 text-rose-300 border-rose-500/40 hover:bg-rose-500 hover:text-slate-950 disabled:opacity-50"
+123:             >{busyId === h.docId ? '…' : '↩ Rückgängig'}</button>
+124:           </li>
+125:         ))}
+126:       </ul>
+127:       <p className="text-[10px] text-slate-500">Rückgängig löscht den Eintrag wieder aus der Collection{compact ? '' : ' (stammt die Karte von der Watchlist, kommt sie dorthin zurück)'}.</p>
+128:     </div>
+129:   );
+130: }
+131: 
+132: // ==========================================
+133: // Komponente
+134: // ==========================================
+135: export default function CardScanner({ mode = 'collection', onClose, onResult, onSearch, onPick, Img, owned, api = API_URL, series = false, onSeriesChange, history = [], onUndo }) {
+136:   const [busy, setBusy] = useState(false);
+137:   const [status, setStatus] = useState('');
+138:   const [error, setError] = useState('');
+139:   const [preview, setPreview] = useState('');
+140:   const [scanned, setScanned] = useState(false);
+141:   const [name, setName] = useState('');
+142:   const [number, setNumber] = useState('');
+143:   const [meta, setMeta] = useState({ set: '', language: '' });
+144:   const [variant, setVariant] = useState('');          // erkannte/gewählte Variante ('' = unbekannt)
+145:   const [variantAuto, setVariantAuto] = useState(false); // true = vom Modell vorgeschlagen, nicht bestätigt
+146:   const [cards, setCards] = useState([]);
+147:   const [scores, setScores] = useState({});
+148:   const canvasRef = useRef(null);
+149:   const dataUrlRef = useRef('');
+150:   const aliveRef = useRef(true);
+151: 
+152:   useEffect(() => {
+153:     aliveRef.current = true;
+154:     return () => { aliveRef.current = false; };
+155:   }, []);
+156: 
+157:   // Treffer werden sofort angezeigt; der Bildvergleich läuft im Hintergrund und sortiert danach nur um
+158:   const rankToken = useRef(0);
+159:   const rankInBackground = (list) => {
+160:     rankToken.current += 1;
+161:     const token = rankToken.current;
+162:     const canvas = canvasRef.current;
+163:     if (list.length < 2 || !canvas) return;
+164:     rankByImage(canvas, list, api, 8)
+165:       .then((r) => {
+166:         if (aliveRef.current && rankToken.current === token) { setCards(r.cards); setScores(r.scores); }
+167:       })
+168:       .catch(() => { /* ohne Bildvergleich */ });
+169:   };
+170: 
+171:   // Analysiert das aktuelle Foto (auch für „Erneut versuchen“, ohne neu zu fotografieren)
+172:   const analyze = async (dataUrl) => {
+173:     setBusy(true); setError(''); setScanned(false); setCards([]); setScores({});
+174:     setStatus('Karte wird gescannt …');
+175:     try {
+176:       const data = await readCard(dataUrl, api);
+177:       if (!aliveRef.current) return;
+178:       const ai = data.aiAnalysis || {};
+179:       setName(ai.name || '');
+180:       setNumber(ai.number || '');
+181:       setMeta({ set: ai.set || '', language: ai.language || '' });
+182:       setVariant(ai.variant || '');
+183:       setVariantAuto(!!ai.variant);
+184: 
+185:       let list = Array.isArray(data.results) ? data.results : [];
+186:       if (list.length === 0 && ai.name && onSearch) {
+187:         setStatus('Suche in der Datenbank …');
+188:         try { list = await onSearch(buildQuery(ai.name, ai.number)); } catch (err) { /* unten: kein Treffer */ }
+189:         if (list.length === 0 && ai.number) { try { list = await onSearch(ai.name); } catch (err) { /* egal */ } }
+190:       }
+191:       if (!aliveRef.current) return;
+192:       setCards(list);
+193:       setScores({});
+194:       setScanned(true);
+195:       rankInBackground(list);
+196:     } catch (err) {
+197:       if (aliveRef.current) setError(err.message || 'Scan fehlgeschlagen.');
+198:     } finally {
+199:       if (aliveRef.current) { setBusy(false); setStatus(''); }
+200:     }

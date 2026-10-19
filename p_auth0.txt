@@ -1,0 +1,59 @@
+// Echtes Login für TCG Vault (Firebase Authentication):
+//   LoginScreen         – Anmelden, Registrieren, Passwort vergessen, Google
+//   AccountPanel        – Konto-Karte im Profil (E-Mail, Bestätigung, Google verknüpfen, Passwort ändern)
+//
+// Importiert nichts aus App.jsx (kein Zirkellbezug). Die Daten bleiben unter users/{uid}/... in Firestore,
+// deshalb ändert sich an den Firestore-Regeln nichts.
+import React, { useState, useEffect } from 'react';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  sendPasswordResetEmail,
+  sendEmailVerification,
+  updateProfile,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  linkWithPopup,
+  linkWithRedirect
+} from 'firebase/auth';
+import { auth } from './firebase';
+import { BRAND_NAME, Disclaimer } from './brand';
+import { markRedirectPending, resolveRedirectOutcome } from './authRedirect';
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD = 8;
+
+const authErrorMessage = (code) => {
+  switch (code) {
+    case 'auth/email-already-in-use': return 'Zu dieser E-Mail-Adresse gibt es schon ein Konto. Bitte anmelden oder „Passwort vergessen“ nutzen.';
+    case 'auth/invalid-email': return 'Diese E-Mail-Adresse ist ungültig.';
+    case 'auth/missing-password': return 'Bitte ein Passwort eingeben.';
+    case 'auth/weak-password': return `Passwort zu schwach (mindestens ${MIN_PASSWORD} Zeichen).`;
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found': return 'E-Mail oder Passwort stimmt nicht.';
+    case 'auth/user-disabled': return 'Dieses Konto wurde deaktiviert.';
+    case 'auth/too-many-requests': return 'Zu viele Versuche. Bitte kurz warten und erneut versuchen.';
+    case 'auth/network-request-failed': return 'Keine Verbindung zu Firebase. Internetverbindung prüfen.';
+    case 'auth/operation-not-allowed':
+    case 'auth/configuration-not-found': return 'Diese Anmeldeart ist in Firebase noch nicht aktiviert (Authentication → Sign-in method).';
+    case 'auth/unauthorized-domain': return 'Diese Domain ist in Firebase nicht freigegeben (Authentication → Settings → Authorized domains).';
+    case 'auth/account-exists-with-different-credential': return 'Zu dieser E-Mail-Adresse gibt es schon ein Konto mit einer anderen Anmeldeart.';
+    case 'auth/credential': return 'Die Anmeldung konnte nicht abgeschlossen werden. Bitte lade die Seite neu (Strg+F5) und versuche es erneut.';
+    case 'auth/credential-already-in-use': return 'Dieses Google-Konto gehört schon zu einem anderen ' + BRAND_NAME + '-Konto.';
+    case 'auth/provider-already-linked': return 'Google ist mit diesem Konto schon verknüpft.';
+    case 'auth/requires-recent-login': return 'Bitte melde dich zur Sicherheit neu an und versuche es dann erneut.';
+    case 'auth/popup-blocked': return 'Das Anmeldefenster wurde blockiert. Bitte Pop-ups für diese Seite erlauben.';
+    default: return 'Etwas ist schiefgelaufen. Bitte erneut versuchen.';
+  }
+};
+
+const googleProvider = () => {
+  const p = new GoogleAuthProvider();
+  p.setCustomParameters({ prompt: 'select_account' });
+  return p;
+};
+
+const IGNORED = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'];
+const POPUP_PROBLEMS = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'];

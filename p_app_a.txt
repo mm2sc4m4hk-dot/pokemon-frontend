@@ -1,0 +1,61 @@
+360:         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+361:         resolve(canvas.toDataURL('image/jpeg', quality));
+362:       };
+363:       img.src = reader.result;
+364:     };
+365:     reader.readAsDataURL(file);
+366:   });
+367: }
+368: 
+369: export default function App() {
+370:   const [dropsOpen, setDropsOpen] = useState(true);
+371:   const [batchAddOpen, setBatchAddOpen] = useState(false);
+372: const [batchSelectedSet, setBatchSelectedSet] = useState('');
+373: const [batchCardNumbers, setBatchCardNumbers] = useState('');
+374: const [batchSetFilter, setBatchSetFilter] = useState('');
+375: const [allSets, setAllSets] = useState([]);
+376: const [batchBusy, setBatchBusy] = useState(false);
+377:   const [authLoading, setAuthLoading] = useState(true);
+378:   const [isAuthenticated, setIsAuthenticated] = useState(false);
+379:   const [currentUser, setCurrentUser] = useState('');
+380: useEffect(() => {
+381:     if (!batchAddOpen || allSets.length > 0) return;
+382:     fetch(`${API_URL}/api/sets-list`)
+383:       .then((r) => (r.ok ? r.json() : []))
+384:       .then((l) => { if (Array.isArray(l)) setAllSets([...l].reverse()); })
+385:       .catch(() => {});
+386:   }, [batchAddOpen, allSets.length]);
+387: 
+388:   const handleBatchAddByNumbers = async () => {
+389:     if (!batchSelectedSet || !batchCardNumbers.trim() || batchBusy) return;
+390:     setBatchBusy(true);
+391:     try {
+392:       const res = await fetch(`${API_URL}/api/sets/${encodeURIComponent(batchSelectedSet)}`);
+393:       if (!res.ok) throw new Error('Set konnte nicht geladen werden');
+394:       const setData = await res.json();
+395:       const norm = (v) => String(v).trim().toLowerCase().replace(/^0+(?=\d)/, '');
+396:       const byLocal = new Map((setData.cards || []).map((c) => [norm(c.localId), c]));
+397:       const counts = new Map();
+398:       const notFound = [];
+399: 
+400:       batchCardNumbers.split(/[,;\s]+/).filter(Boolean).forEach((n) => {
+401:         const c = byLocal.get(norm(n));
+402:         if (c) counts.set(c.id, (counts.get(c.id) || 0) + 1);
+403:         else notFound.push(n);
+404:       });
+405: 
+406:       if (counts.size === 0) {
+407:         setToastMsg('Keine dieser Nummern gefunden.');
+408:         return;
+409:       }
+410: 
+411:       const ids = [...counts.keys()];
+412:       const full = [];
+413:       for (let i = 0; i < ids.length; i += 40) {
+414:         const r = await fetch(`${API_URL}/api/cards/bulk`, {
+415:           method: 'POST',
+416:           headers: { 'Content-Type': 'application/json' },
+417:           body: JSON.stringify({ ids: ids.slice(i, i + 40) })
+418:         });
+419:         if (!r.ok) throw new Error(`Server antwortet mit Status ${r.status}`);
+420:         full.push(...((await r.json()).cards || []));

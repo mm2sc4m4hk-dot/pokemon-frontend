@@ -1,0 +1,119 @@
+      aliveRef.current = false;
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    };
+  }, []);
+
+  const patch = (i, p) => setCells((prev) => prev.map((c) => (c.idx === i ? { ...c, ...p } : c)));
+
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    setError('');
+    try {
+      const { source, w, h } = await loadImageSource(file);
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      const url = URL.createObjectURL(file);
+      urlRef.current = url;
+      setPhoto({ url, w, h, source });
+    } catch (err) {
+      setError('Das Foto konnte nicht gelesen werden.');
+    }
+  };
+
+  // Name/Nummer suchen (erst mit Nummer, sonst nur Name), mehrere Treffer per Bildvergleich sortieren
+  const lookup = async (name, number, canvas) => {
+    const nm = String(name || '').trim();
+    if (!nm) return { cards: [], scores: {} };
+    let list = await onSearch(buildQuery(nm, number));
+    if (list.length === 0 && number) list = await onSearch(nm);
+    if (list.length > 1 && canvas) {
+      try { return await rankByImage(canvas, list, api, 8); } catch (e) { /* ohne Bildvergleich */ }
+    }
+    return { cards: list, scores: {} };
+  };
+
+  const run = async () => {
+    if (!photo || running) return;
+    const rects = cellRects(photo.w, photo.h, rows, cols, trim);
+    canvases.current = [];
+    setError('');
+    setStep('review');
+    setRunning(true);
+    setCells(rects.map((_, i) => ({ idx: i, status: 'wait', name: '', number: '', thumb: '', cards: [], scores: {}, sel: -1, include: false, variant: '', vAuto: false })));
+    
+    try {
+      for (let i = 0; i < rects.length; i += 1) {
+        if (!aliveRef.current) return;
+        setProgress(`Karte ${i + 1} / ${rects.length} wird gescannt …`);
+        const canvas = cellCanvas(photo.source, rects[i]);
+        canvases.current[i] = canvas;
+        const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+
+        let name = '';
+        let number = '';
+        let foundCards = [];
+        let scores = {};
+        let status = 'none';
+        let variant = '';
+
+        try {
+          const scanResult = await readCard(base64Image);
+          name = scanResult.aiAnalysis?.name || '';
+          number = scanResult.aiAnalysis?.number || '';
+          variant = scanResult.aiAnalysis?.variant || '';
+          foundCards = scanResult.results || [];
+
+          // Fallback-Suche, falls Backend-Ergebnis leer ist, aber ein Name/Nummer erkannt wurde
+          if (foundCards.length === 0 && (name || number)) {
+            const fallback = await lookup(name, number, canvas);
+            foundCards = fallback.cards || [];
+            scores = fallback.scores || {};
+          }
+
+          status = foundCards.length ? 'ok' : 'none';
+        } catch (e) {
+          status = 'error';
+        }
+
+        if (!aliveRef.current) return;
+        patch(i, {
+          status,
+          name,
+          number,
+          thumb: smallThumb(canvas),
+          cards: foundCards,
+          scores,
+          sel: foundCards.length ? 0 : -1,
+          include: foundCards.length > 0,
+          variant,
+          vAuto: !!variant
+        });
+      }
+    } catch (e) {
+      if (aliveRef.current) setError('Analyse fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
+    } finally {
+      if (aliveRef.current) { setRunning(false); setProgress(''); }
+    }
+  };
+
+  const research = async (i) => {
+    const c = cells[i];
+    patch(i, { status: 'wait' });
+    try {
+      const found = await lookup(c.name, c.number, canvases.current[i]);
+      patch(i, { status: found.cards.length ? 'ok' : 'none', cards: found.cards, scores: found.scores, sel: found.cards.length ? 0 : -1, include: found.cards.length > 0 });
+    } catch (e) { patch(i, { status: 'error' }); }
+  };
+
+  const chosenOf = (c) => (c.sel >= 0 ? c.cards[c.sel] : null);
+  const count = cells.filter((c) => c.include && chosenOf(c)).length;
+
+  const doAdd = async () => {
+    const picked = new Map();
+    cells.forEach((c) => {
+      const card = chosenOf(c);
+      if (!c.include || !card) return;
+      const variant = effVariant(c, card);
+      const key = `${card.id}|${variant}`;
+      const e = picked.get(key) || { card, qty: 0, variant };

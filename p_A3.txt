@@ -1,0 +1,104 @@
+1597:               </div>
+1598:               {invest.n > 0 && (
+1599:                 <div className="mt-4 pt-4 border-t border-slate-800 space-y-2 text-sm">
+1600:                   <div className="flex justify-between"><span className="text-slate-400">Investiert ({invest.n} Karten):</span><span className="font-bold text-slate-200">{invest.cost.toFixed(2)} €</span></div>
+1601:                   <div className="flex justify-between"><span className="text-slate-400">Aktueller Wert:</span><span className="font-bold text-slate-200">{invest.value.toFixed(2)} €</span></div>
+1602:                   <div className="flex justify-between"><span className="text-slate-400">Gewinn / Verlust:</span><span className={`font-black ${invest.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{fmtSigned(invest.profit)}</span></div>
+1603:                 </div>
+1604:               )}
+1605:               <div className="mt-2 flex justify-between text-sm">
+1606:                 <span className="text-slate-400">Karten auf der Watchlist:</span>
+1607:                 <span className="font-bold text-cyan-400">{watchlist.length} Stück</span>
+1608:               </div>
+1609:             </div>
+1610: 
+1611:             <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+1612:               <h3 className="font-bold text-slate-100 text-sm mb-3">Wertverlauf deiner Collection</h3>
+1613:               {snapshotsDenied ? (
+1614:                 <p className="text-xs text-amber-300">Der Verlauf kann nicht gespeichert werden. Bitte in der Firebase Console die Firestore-Regeln für {'users/{uid}/snapshots'} freigeben.</p>
+1615:               ) : (
+1616:                 <ValueChart points={snapshots.map((s) => ({ date: s.date, value: s.value }))} />
+1617:               )}
+1618:             </div>
+1619: 
+1620:             {collection.length > 0 && <WeeklyMovers collection={collection} />}
+1621: 
+1622:             {collection.length > 0 && (
+1623:               <>
+1624:                 <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+1625:                   <h3 className="font-bold text-slate-100 text-sm mb-3">🏆 Top 10 – wertvollste Karten</h3>
+1626:                   <HBars rows={topCards} />
+1627:                 </div>
+1628:                 <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+1629:                   <h3 className="font-bold text-slate-100 text-sm mb-3">📦 Wert pro Set</h3>
+1630:                   <HBars rows={setValues} />
+1631:                 </div>
+1632:               </>
+1633:             )}
+1634: 
+1635:             {collection.length > 0 && (
+1636:               <>
+1637:                 <PortfolioSplit collection={collection} />
+1638:                 <SellAllCalculator collection={collection} />
+1639:               </>
+1640:             )}
+1641: 
+1642:             <DataQualityCheck
+1643:               collection={collection}
+1644:               watchlist={watchlist}
+1645:               uid={auth.currentUser?.uid}
+1646:               calculatePrice={calculatePrice}
+1647:               isAutoPrice={isAutoPrice}
+1648:               onEdit={openEditCard}
+1649:             />
+1650: 
+1651:             <AccountPanel />
+1652: 
+1653:             <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} api={API_URL} />
+1654:             <BackupPanel
+1655:               collection={collection}
+1656:               watchlist={watchlist}
+1657:               api={API_URL}
+1658:               conditions={CONDITIONS}
+1659:               languages={LANGUAGES}
+1660:               calculatePrice={calculatePrice}
+1661:               isAutoPrice={isAutoPrice}
+1662:             />
+1663:           </div>
+1664:         )}
+1665: 
+1666: {activeTab === 'collection' && (
+1667:           <div className="space-y-4 fade-in">
+1668:             <div className="flex gap-2 overflow-x-auto pb-1">
+1669:               {[['cards', '🎴 Karten'], ['binder', '📒 Binder'], ['sets', '📊 Sets'], ['dex', '📖 Pokédex'], ['artist', '🎨 Artist'], ['sell', `🏷️ Verkauf (${collection.filter(i => i.forSale).length})`], ['sold', '🧾 Verkäufe'], ['trade', '🔁 Tausch']].map(([key, label]) => (
+1670:                 <button key={key} onClick={() => setCollectionView(key)} className={`flex-1 whitespace-nowrap px-3 py-2 rounded-lg text-xs font-bold border transition-colors ${collectionView === key ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-slate-200'}`}>{label}</button>
+1671:               ))}
+1672:             </div>
+1673: 
+1674:             {/* EINZEL-SCANNER BUTTON */}
+1675:             <button onClick={() => setScanOpen('collection')} className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md flex items-center justify-center gap-2">
+1676:               📷 Einzelne Karte scannen &amp; hinzufügen
+1677:             </button>
+1678: 
+1679: 
+1680: {/* NEU: ganze Binder-Seite */}
+1681: <button
+1682:   onClick={() => setBatchOpen(true)}
+1683:   className="w-full bg-slate-900 border border-cyan-500/30 text-cyan-300 text-sm font-black py-3 rounded-xl hover:bg-slate-800 transition-colors shadow-md flex items-center justify-center gap-2"
+1684: >
+1685:   🗂️ Ganze Binder-Seite fotografieren &amp; hinzufügen
+1686: </button>
+1687: 
+1688: {/* BOOSTER-PACK SCHNELL-EINGABE / BATCH ADD */}
+1689:             <div className="bg-slate-900 border border-cyan-500/30 rounded-xl p-3 shadow-lg">
+1690:               <div className="flex justify-between items-center">
+1691:                 <div className="flex items-center gap-2">
+1692:                   <span className="text-lg">📦</span>
+1693:                   <div>
+1694:                     <h3 className="text-sm font-bold text-slate-100">Booster-Pack Schnell-Eingabe</h3>
+1695:                     <p className="text-[10px] text-slate-400">Mehrere Karten nach Set &amp; Nummer erfassen</p>
+1696:                   </div>
+1697:                 </div>
+1698:                 <button
+1699:                   onClick={() => setBatchAddOpen(!batchAddOpen)}
+1700:                   className="text-xs font-bold text-cyan-400 hover:text-cyan-300 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/30 transition-colors"

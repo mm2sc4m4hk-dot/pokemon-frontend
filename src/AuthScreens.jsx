@@ -15,10 +15,17 @@ import {
   signInWithPopup,
   signInWithRedirect,
   linkWithPopup,
-  linkWithRedirect
+  linkWithRedirect,
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
+  reauthenticateWithRedirect,
+  signOut
 } from 'firebase/auth';
 import { auth } from './firebase';
-import { BRAND_NAME, Disclaimer } from './brand';
+import { BRAND_NAME, Disclaimer, Footer } from './brand';
+import { API_URL, QUOTA_CHANGED_EVENT } from './config';
+import { navigate } from './router';
 import { markRedirectPending, resolveRedirectOutcome } from './authRedirect';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

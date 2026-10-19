@@ -84,9 +84,9 @@ self.addEventListener('fetch', (event) => {
 
 // ---- Push-Nachrichten (Zielpreis-Alarm) ----
 self.addEventListener('push', (event) => {
-  let data = {};
+  let data;
   try { data = event.data ? event.data.json() : {}; }
-  catch (e) { data = { title: 'TCG Vault', body: event.data ? event.data.text() : '' }; }
+  catch { data = { title: 'TCG Vault', body: event.data ? event.data.text() : '' }; }
 
   event.waitUntil(self.registration.showNotification(data.title || 'TCG Vault', {
     body: data.body || '',

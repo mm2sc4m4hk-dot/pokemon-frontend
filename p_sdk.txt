@@ -1,0 +1,110 @@
+6591:  *   http://www.apache.org/licenses/LICENSE-2.0
+6592:  *
+6593:  * Unless required by applicable law or agreed to in writing, software
+6594:  * distributed under the License is distributed on an "AS IS" BASIS,
+6595:  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+6596:  * See the License for the specific language governing permissions and
+6597:  * limitations under the License.
+6598:  */
+6599: async function _reauthenticate(user, credential, bypassAuthState = false) {
+6600:     const { auth } = user;
+6601:     if (_isFirebaseServerApp(auth.app)) {
+6602:         return Promise.reject(_serverAppCurrentUserOperationNotSupportedError(auth));
+6603:     }
+6604:     const operationType = "reauthenticate" /* OperationType.REAUTHENTICATE */;
+6605:     try {
+6606:         const response = await _logoutIfInvalidated(user, _processCredentialSavingMfaContextIfNecessary(auth, operationType, credential, user), bypassAuthState);
+6607:         _assert(response.idToken, auth, "internal-error" /* AuthErrorCode.INTERNAL_ERROR */);
+6608:         const parsed = _parseToken(response.idToken);
+6609:         _assert(parsed, auth, "internal-error" /* AuthErrorCode.INTERNAL_ERROR */);
+6610:         const { sub: localId } = parsed;
+6611:         _assert(user.uid === localId, auth, "user-mismatch" /* AuthErrorCode.USER_MISMATCH */);
+6612:         return UserCredentialImpl._forOperation(user, operationType, response);
+6613:     }
+6614:     catch (e) {
+6615:         // Convert user deleted error into user mismatch
+6616:         if (e?.code === `auth/${"user-not-found" /* AuthErrorCode.USER_DELETED */}`) {
+6617:             _fail(auth, "user-mismatch" /* AuthErrorCode.USER_MISMATCH */);
+6618:         }
+6619:         throw e;
+6620:     }
+6621: }
+6622: 
+6623: /**
+6624:  * @license
+6625:  * Copyright 2020 Google LLC
+6626:  *
+6627:  * Licensed under the Apache License, Version 2.0 (the "License");
+6628:  * you may not use this file except in compliance with the License.
+6629:  * You may obtain a copy of the License at
+6630:  *
+6631:  *   http://www.apache.org/licenses/LICENSE-2.0
+6632:  *
+6633:  * Unless required by applicable law or agreed to in writing, software
+6634:  * distributed under the License is distributed on an "AS IS" BASIS,
+6635:  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+6636:  * See the License for the specific language governing permissions and
+6637:  * limitations under the License.
+6638:  */
+6639: async function _signInWithCredential(auth, credential, bypassAuthState = false) {
+6640:     if (_isFirebaseServerApp(auth.app)) {
+6641:         return Promise.reject(_serverAppCurrentUserOperationNotSupportedError(auth));
+6642:     }
+6643:     const operationType = "signIn" /* OperationType.SIGN_IN */;
+6644:     const response = await _processCredentialSavingMfaContextIfNecessary(auth, operationType, credential);
+6645:     const userCredential = await UserCredentialImpl._fromIdTokenResponse(auth, operationType, response);
+6646:     if (!bypassAuthState) {
+6647:         await auth._updateCurrentUser(userCredential.user);
+6648:     }
+6649:     return userCredential;
+6650: }
+6651: /**
+6652:  * Asynchronously signs in with the given credentials.
+6653:  *
+6654:  * @remarks
+6655:  * An {@link AuthProvider} can be used to generate the credential.
+6656:  *
+6657:  * This method is not supported by {@link Auth} instances created with a
+6658:  * {@link @firebase/app#FirebaseServerApp}.
+6659:  *
+6660:  * @param auth - The {@link Auth} instance.
+6661:  * @param credential - The auth credential.
+6662:  *
+6663:  * @public
+6664:  */
+6665: async function signInWithCredential(auth, credential) {
+6666:     return _signInWithCredential(_castAuth(auth), credential);
+6667: }
+6668: /**
+6669:  * Links the user account with the given credentials.
+6670:  *
+6671:  * @remarks
+6672:  * An {@link AuthProvider} can be used to generate the credential.
+6673:  *
+6674:  * @param user - The user.
+6675:  * @param credential - The auth credential.
+6676:  *
+6677:  * @public
+6678:  */
+6679: async function linkWithCredential(user, credential) {
+6680:     const userInternal = getModularInstance(user);
+6681:     await _assertLinkedStatus(false, userInternal, credential.providerId);
+6682:     return _link(userInternal, credential);
+6683: }
+6684: /**
+6685:  * Re-authenticates a user using a fresh credential.
+6686:  *
+6687:  * @remarks
+6688:  * Use before operations such as {@link updatePassword} that require tokens from recent sign-in
+6689:  * attempts. This method can be used to recover from a `CREDENTIAL_TOO_OLD_LOGIN_AGAIN` error
+6690:  * or a `TOKEN_EXPIRED` error.
+6691:  *
+6692:  * This method is not supported on any {@link User} signed in by {@link Auth} instances
+6693:  * created with a {@link @firebase/app#FirebaseServerApp}.
+6694:  *
+6695:  * @param user - The user.
+6696:  * @param credential - The auth credential.
+6697:  *
+6698:  * @public
+6699:  */
+6700: async function reauthenticateWithCredential(user, credential) {

@@ -1,0 +1,71 @@
+2130:                       </button>
+2131:                       {(() => {
+2132:                         const inWatchlist = watchlistIds.has(card.id);
+2133:                         return (
+2134:                           <button
+2135:                             onClick={() => toggleWatchlist(card)}
+2136:                             aria-pressed={inWatchlist}
+2137:                             title={inWatchlist ? 'Von der Watchlist entfernen' : 'Zur Watchlist hinzufügen'}
+2138:                             className={`text-xs px-3 rounded-lg border transition-colors ${inWatchlist ? 'bg-cyan-500 text-slate-950 border-cyan-400 shadow-md shadow-cyan-500/30' : 'bg-slate-800 text-slate-300 hover:text-cyan-400 border-slate-700'}`}
+2139:                           >
+2140:                             ★
+2141:                           </button>
+2142:                         );
+2143:                       })()}
+2144:                     </div>
+2145:                   </div>
+2146:                 );
+2147:               })}
+2148:             </div>
+2149:           </div>
+2150:         )}
+2151:         <Disclaimer className="mt-8 mb-2 px-4" />
+2152:       </main>
+2153: 
+2154:       <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-cyan-500/20 px-6 py-2 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
+2155:         <div className="max-w-md mx-auto flex justify-between items-center">
+2156:           <button onClick={() => setActiveTab('profile')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'profile' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">👤</span><span>Profil</span></button>
+2157:           <button onClick={() => setActiveTab('collection')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'collection' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🎴</span><span>Collection</span></button>
+2158: 
+2159:           <button 
+2160:             onClick={() => setActiveTab('watchlist')} 
+2161:             className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'watchlist' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}
+2162:           >
+2163:             <div className="relative">
+2164:               <span className="text-lg">★</span>
+2165:               {alarmCount > 0 && (
+2166:                 <span className="absolute -top-1 -right-3.5 bg-rose-500 text-white font-black text-[9px] px-1.5 py-0.5 rounded-full animate-pulse shadow-md">
+2167:                   {alarmCount}
+2168:                 </span>
+2169:               )}
+2170:             </div>
+2171:             <span>Watchlist</span>
+2172:           </button>
+2173: 
+2174:           <button onClick={() => setActiveTab('search')} className={`flex flex-col items-center gap-1 text-xs font-bold transition-all ${activeTab === 'search' ? 'text-cyan-400 scale-110' : 'text-slate-500 hover:text-slate-400'}`}><span className="text-lg">🔍</span><span>Suchen</span></button>
+2175:         </div>
+2176:       </nav>
+2177: 
+2178:       {scanOpen && (
+2179:         <CardScanner
+2180:           mode={scanOpen}
+2181:           onClose={() => setScanOpen(null)}
+2182:           onResult={handleScanForSearch}
+2183:           onSearch={scanSearch}
+2184:           onPick={handleScanPick}
+2185:           Img={CardImage}
+2186:           owned={ownedMap}
+2187:           api={API_URL}
+2188:           series={scanSeries}
+2189:           onSeriesChange={(v) => { setScanSeries(v); saveSetting('scanSeries', v ? '1' : '0'); }}
+2190:           history={scanHistory}
+2191:           onUndo={undoScan}
+2192:         />
+2193:       )}
+2194: 
+2195:       {batchOpen && (
+2196:         <BatchScanner
+2197:           onClose={() => setBatchOpen(false)}
+2198:           onSearch={scanSearch}
+2199:           onAdd={addBatchToCollection}
+2200:           Img={CardImage}

@@ -1,0 +1,179 @@
+      aliveRef.current = false;
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    };
+  }, []);
+
+  const patch = (i, p) => setCells((prev) => prev.map((c) => (c.idx === i ? { ...c, ...p } : c)));
+
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    setError('');
+    try {
+      const { source, w, h } = await loadImageSource(file);
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      const url = URL.createObjectURL(file);
+      urlRef.current = url;
+      setPhoto({ url, w, h, source });
+    } catch (err) {
+      setError('Das Foto konnte nicht gelesen werden.');
+    }
+  };
+
+  // Name/Nummer suchen (erst mit Nummer, sonst nur Name), mehrere Treffer per Bildvergleich sortieren
+  const lookup = async (name, number, canvas) => {
+    const nm = String(name || '').trim();
+    if (!nm) return { cards: [], scores: {} };
+    let list = await onSearch(buildQuery(nm, number));
+    if (list.length === 0 && number) list = await onSearch(nm);
+    if (list.length > 1 && canvas) {
+      try { return await rankByImage(canvas, list, api, 8); } catch (e) { /* ohne Bildvergleich */ }
+    }
+    return { cards: list, scores: {} };
+  };
+
+  const run = async () => {
+    if (!photo || running) return;
+    const rects = cellRects(photo.w, photo.h, rows, cols, trim);
+    canvases.current = [];
+    setError('');
+    setStep('review');
+    setRunning(true);
+    setCells(rects.map((_, i) => ({ idx: i, status: 'wait', name: '', number: '', thumb: '', cards: [], scores: {}, sel: -1, include: false, variant: '', vAuto: false })));
+    
+    try {
+      for (let i = 0; i < rects.length; i += 1) {
+        if (!aliveRef.current) return;
+        setProgress(`Karte ${i + 1} / ${rects.length} wird gescannt …`);
+        const canvas = cellCanvas(photo.source, rects[i]);
+        canvases.current[i] = canvas;
+        const base64Image = canvas.toDataURL('image/jpeg', 0.85);
+
+        let name = '';
+        let number = '';
+        let foundCards = [];
+        let scores = {};
+        let status = 'none';
+        let variant = '';
+
+        try {
+          const scanResult = await readCard(base64Image);
+          name = scanResult.aiAnalysis?.name || '';
+          number = scanResult.aiAnalysis?.number || '';
+          variant = scanResult.aiAnalysis?.variant || '';
+          foundCards = scanResult.results || [];
+
+          // Fallback-Suche, falls Backend-Ergebnis leer ist, aber ein Name/Nummer erkannt wurde
+          if (foundCards.length === 0 && (name || number)) {
+            const fallback = await lookup(name, number, canvas);
+            foundCards = fallback.cards || [];
+            scores = fallback.scores || {};
+          }
+
+          status = foundCards.length ? 'ok' : 'none';
+        } catch (e) {
+          status = 'error';
+        }
+
+        if (!aliveRef.current) return;
+        patch(i, {
+          status,
+          name,
+          number,
+          thumb: smallThumb(canvas),
+          cards: foundCards,
+          scores,
+          sel: foundCards.length ? 0 : -1,
+          include: foundCards.length > 0,
+          variant,
+          vAuto: !!variant
+        });
+      }
+    } catch (e) {
+      if (aliveRef.current) setError('Analyse fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
+    } finally {
+      if (aliveRef.current) { setRunning(false); setProgress(''); }
+    }
+  };
+
+  const research = async (i) => {
+    const c = cells[i];
+    patch(i, { status: 'wait' });
+    try {
+      const found = await lookup(c.name, c.number, canvases.current[i]);
+      patch(i, { status: found.cards.length ? 'ok' : 'none', cards: found.cards, scores: found.scores, sel: found.cards.length ? 0 : -1, include: found.cards.length > 0 });
+    } catch (e) { patch(i, { status: 'error' }); }
+  };
+
+  const chosenOf = (c) => (c.sel >= 0 ? c.cards[c.sel] : null);
+  const count = cells.filter((c) => c.include && chosenOf(c)).length;
+
+  const doAdd = async () => {
+    const picked = new Map();
+    cells.forEach((c) => {
+      const card = chosenOf(c);
+      if (!c.include || !card) return;
+      const variant = effVariant(c, card);
+      const key = `${card.id}|${variant}`;
+      const e = picked.get(key) || { card, qty: 0, variant };
+      e.qty += 1;
+      picked.set(key, e);
+    });
+    if (picked.size === 0) return;
+    setAdding(true);
+    try {
+      const ok = await onAdd([...picked.values()], cond, lang);
+      if (ok === false) { setAdding(false); return; } // Duplikat-Warnung abgebrochen
+      onClose();
+    } catch (e) {
+      setError('Hinzufügen fehlgeschlagen: ' + ((e && e.message) || 'Unbekannter Fehler'));
+      setAdding(false);
+    }
+  };
+
+  const inputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-md px-2 py-1 text-xs outline-none';
+  const pill = (active) => `px-3 py-1.5 rounded-lg text-xs font-bold border ${active ? 'bg-cyan-500 text-slate-950 border-cyan-500' : 'bg-slate-950 text-slate-400 border-slate-800'}`;
+
+  return (
+    <div className="fixed inset-0 z-[80] bg-slate-950 flex flex-col text-slate-100">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-500/20 bg-slate-900">
+        <h2 className="font-black text-cyan-400 text-sm">🗂️ Mehrere Karten per Foto</h2>
+        <button onClick={onClose} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400">Schließen ✕</button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4">
+        {step === 'setup' && (
+          <div className="space-y-4 max-w-xl mx-auto">
+            <p className="text-xs text-slate-400">
+              Fotografiere eine ganze Binder-Seite (oder Karten in einem Raster) von oben, gerade und ohne Blitz-Reflexe.
+              Stelle unten Reihen und Spalten ein, sodass das Raster genau über den Karten liegt.
+            </p>
+            <label className="block text-center cursor-pointer bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black py-3 rounded-xl text-sm transition-colors">
+              📷 Foto aufnehmen / auswählen
+              <input type="file" accept="image/*" onChange={onFile} className="hidden" />
+            </label>
+            {error && <p className="text-xs text-amber-300">{error}</p>}
+
+            {photo && (
+              <>
+                <div className="relative rounded-xl overflow-hidden border border-slate-700 bg-black">
+                  <img src={photo.url} alt="Foto" className="w-full block" />
+                  <div
+                    className="absolute grid pointer-events-none"
+                    style={{ left: `${trim}%`, right: `${trim}%`, top: `${trim}%`, bottom: `${trim}%`, gridTemplateColumns: `repeat(${cols}, 1fr)`, gridTemplateRows: `repeat(${rows}, 1fr)` }}
+                  >
+                    {Array.from({ length: rows * cols }, (_, i) => (
+                      <div key={i} className="border border-dashed border-cyan-300/80 flex items-start justify-start">
+                        <span className="text-[10px] bg-slate-950/70 text-cyan-300 px-1 rounded-br">{i + 1}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-[10px] text-slate-400 mb-1">Reihen</p>
+                    <div className="flex gap-1">{[1, 2, 3, 4, 5].map((n) => <button key={n} onClick={() => setRows(n)} className={`flex-1 ${pill(rows === n)}`}>{n}</button>)}</div>
+                  </div>
+                  <div>

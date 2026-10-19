@@ -1,0 +1,50 @@
+      }
+
+      const entries = full.map((card) => ({ card, qty: counts.get(card.id) || 1 }));
+      const ok = await addBatchToCollection(
+        entries,
+        loadSetting('lastCondition', '') || 'Near Mint',
+        loadSetting('lastLang', '') || 'Deutsch 🇩🇪'
+      );
+      if (ok === false) return;
+      setBatchCardNumbers('');
+      if (notFound.length) setToastMsg(`Nicht gefunden: ${notFound.join(', ')}`);
+    } catch (e) {
+      alert('Hinzufügen fehlgeschlagen: ' + (e.message || 'Unbekannter Fehler'));
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
+  const [activeTab, setActiveTab] = useState('profile');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchSet, setSearchSet] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [searchSelections, setSearchSelections] = useState({});
+
+  const [collection, setCollection] = useState([]);
+  const [watchlist, setWatchlist] = useState([]);
+
+  const [selectedCard, setSelectedCard] = useState(null);
+  const [modalType, setModalType] = useState(null);
+
+  const [cardCondition, setCardCondition] = useState(() => loadSetting('lastCondition', '') || 'Near Mint');
+  const [cardLanguage, setCardLanguage] = useState(() => loadSetting('lastLang', '') || 'Deutsch 🇩🇪');
+  const [cardVariant, setCardVariant] = useState('normal');
+  const [gradeCompany, setGradeCompany] = useState('');
+  const [gradeValue, setGradeValue] = useState('');
+  const [alertHigh, setAlertHigh] = useState('');
+  const [detailVariant, setDetailVariant] = useState('normal');
+  const [customPrice, setCustomPrice] = useState('');
+  const [customImage, setCustomImage] = useState('');
+
+  const [moveFromWatchlistId, setMoveFromWatchlistId] = useState(null);
+  const [removeFromWatchlistAfter, setRemoveFromWatchlistAfter] = useState(true);
+  const [editOriginalPrice, setEditOriginalPrice] = useState('');
+
+  const [customCardOpen, setCustomCardOpen] = useState(false);
+  const [customName, setCustomName] = useState('');
+  const [customNumber, setCustomNumber] = useState('');
+  const [customSetName, setCustomSetName] = useState('');

@@ -1,0 +1,121 @@
+}
+
+// ==========================================
+// Komponente
+// ==========================================
+export default function CardScanner({ mode = 'collection', onClose, onResult, onSearch, onPick, Img, owned, api = API_URL, series = false, onSeriesChange, history = [], onUndo }) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+  const [preview, setPreview] = useState('');
+  const [scanned, setScanned] = useState(false);
+  const [name, setName] = useState('');
+  const [number, setNumber] = useState('');
+  const [meta, setMeta] = useState({ set: '', language: '' });
+  const [variant, setVariant] = useState('');          // erkannte/gewählte Variante ('' = unbekannt)
+  const [variantAuto, setVariantAuto] = useState(false); // true = vom Modell vorgeschlagen, nicht bestätigt
+  const [cards, setCards] = useState([]);
+  const [scores, setScores] = useState({});
+  const canvasRef = useRef(null);
+  const dataUrlRef = useRef('');
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => { aliveRef.current = false; };
+  }, []);
+
+  // Treffer werden sofort angezeigt; der Bildvergleich läuft im Hintergrund und sortiert danach nur um
+  const rankToken = useRef(0);
+  const rankInBackground = (list) => {
+    rankToken.current += 1;
+    const token = rankToken.current;
+    const canvas = canvasRef.current;
+    if (list.length < 2 || !canvas) return;
+    rankByImage(canvas, list, api, 8)
+      .then((r) => {
+        if (aliveRef.current && rankToken.current === token) { setCards(r.cards); setScores(r.scores); }
+      })
+      .catch(() => { /* ohne Bildvergleich */ });
+  };
+
+  // Analysiert das aktuelle Foto (auch für „Erneut versuchen“, ohne neu zu fotografieren)
+  const analyze = async (dataUrl) => {
+    setBusy(true); setError(''); setScanned(false); setCards([]); setScores({});
+    setStatus('Karte wird gescannt …');
+    try {
+      const data = await readCard(dataUrl, api);
+      if (!aliveRef.current) return;
+      const ai = data.aiAnalysis || {};
+      setName(ai.name || '');
+      setNumber(ai.number || '');
+      setMeta({ set: ai.set || '', language: ai.language || '' });
+      setVariant(ai.variant || '');
+      setVariantAuto(!!ai.variant);
+
+      let list = Array.isArray(data.results) ? data.results : [];
+      if (list.length === 0 && ai.name && onSearch) {
+        setStatus('Suche in der Datenbank …');
+        try { list = await onSearch(buildQuery(ai.name, ai.number)); } catch (err) { /* unten: kein Treffer */ }
+        if (list.length === 0 && ai.number) { try { list = await onSearch(ai.name); } catch (err) { /* egal */ } }
+      }
+      if (!aliveRef.current) return;
+      setCards(list);
+      setScores({});
+      setScanned(true);
+      rankInBackground(list);
+    } catch (err) {
+      if (aliveRef.current) setError(err.message || 'Scan fehlgeschlagen.');
+    } finally {
+      if (aliveRef.current) { setBusy(false); setStatus(''); }
+    }
+  };
+
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file || busy) return;
+    setError('');
+    try {
+      const { source, w, h } = await loadImageSource(file);
+      const canvas = shrinkToCanvas(source, w, h);
+      canvasRef.current = canvas;
+      dataUrlRef.current = canvas.toDataURL('image/jpeg', 0.8);
+      setPreview(dataUrlRef.current);
+      await analyze(dataUrlRef.current);
+    } catch (err) {
+      setError('Das Foto konnte nicht gelesen werden.');
+    }
+  };
+
+  const research = async () => {
+    if (!name.trim() || !onSearch || busy) return;
+    setBusy(true); setError(''); setStatus('Suche in der Datenbank …');
+    try {
+      let list = await onSearch(buildQuery(name, number));
+      if (list.length === 0 && number) list = await onSearch(name.trim());
+      if (!aliveRef.current) return;
+      setCards(list);
+      setScores({});
+      setScanned(true);
+      rankInBackground(list);
+    } catch (err) {
+      if (aliveRef.current) setError(err.message || 'Suche fehlgeschlagen.');
+    } finally {
+      if (aliveRef.current) { setBusy(false); setStatus(''); }
+    }
+  };
+
+  const takeToSearch = () => {
+    if (!name.trim() || !onResult) return;
+    onResult({ query: buildQuery(name, number), name: name.trim(), number: String(number || '').trim() });
+  };
+
+  const onEnter = (e) => { if (e.key === 'Enter') { e.preventDefault(); research(); } };
+
+  const inputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none';
+  const btnCls = 'block text-center cursor-pointer font-black py-3 rounded-xl text-sm transition-colors';
+  const disabled = busy ? 'opacity-50 pointer-events-none' : '';
+
+  return (
+    <div className="fixed inset-0 z-[80] bg-slate-950 flex flex-col text-slate-100">

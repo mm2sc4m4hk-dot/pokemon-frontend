@@ -1,0 +1,85 @@
+1: // Rechtsseiten (Impressum + Datenschutzerklärung) als SPA-Routen.
+2: // Aufruf: /impressum und /datenschutz (siehe router.js und vercel.json).
+3: //
+4: // Inhalte entsprechen den bereitgestellten Rechtstexten (imp.txt / dsgvo.txt).
+5: // Das Layout folgt dem dunklen Theme der App (Tailwind, cyan/slate).
+6: import React from 'react';
+7: import { BRAND_NAME, Disclaimer } from './brand';
+8: import { navigate } from './router';
+9: 
+10: const Section = ({ title, children }) => (
+11:   <section className="space-y-2">
+12:     <h2 className="text-base font-black text-cyan-300">{title}</h2>
+13:     <div className="space-y-2 text-sm text-slate-300 leading-relaxed">{children}</div>
+14:   </section>
+15: );
+16: 
+17: const P = ({ children }) => <p>{children}</p>;
+18: 
+19: export function LegalShell({ title, children }) {
+20:   return (
+21:     <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
+22:       <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between">
+23:         <span className="text-cyan-400 text-lg font-black tracking-wider">{title}</span>
+24:         <button
+25:           onClick={() => navigate('/')}
+26:           className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-cyan-400 transition-colors"
+27:         >
+28:           ← Zurück zur App
+29:         </button>
+30:       </header>
+31:       <main className="max-w-3xl mx-auto p-4 pb-16 space-y-6">
+32:         {children}
+33:         <Disclaimer className="mt-8" />
+34:       </main>
+35:     </div>
+36:   );
+37: }
+38: 
+39: // ---------------------------------------------------------------------
+40: // Impressum
+41: // ---------------------------------------------------------------------
+42: export function ImpressumPage() {
+43:   return (
+44:     <LegalShell title="Impressum">
+45:       <h1 className="text-2xl font-black text-white">Impressum</h1>
+46: 
+47:       <Section title="Angaben gemäß § 5 DDG">
+48:         <P>Leon Mertz</P>
+49:         <P>Nelkenweg 6</P>
+50:         <P>40882 Ratingen</P>
+51:       </Section>
+52: 
+53:       <Section title="Kontakt">
+54:         <P>Telefon: 01709094830</P>
+55:         <P>Telefax: +49 (0) 123 44 55 99</P>
+56:         <P>E-Mail: <a className="text-cyan-400 underline" href="mailto:poketracker0203@gmail.com">poketracker0203@gmail.com</a></P>
+57:       </Section>
+58: 
+59:       <Section title="Verantwortlich für den Inhalt nach § 18 Abs. 2 MStV">
+60:         <P>Leon Mertz, Anschrift wie oben.</P>
+61:       </Section>
+62: 
+63:       <Section title="EU-Streitschlichtung">
+64:         <P>
+65:           Die Europäische Kommission stellt eine Plattform zur Online-Streitbeilegung (OS) bereit:{' '}
+66:           <a className="text-cyan-400 underline" href="https://ec.europa.eu/consumers/odr/" target="_blank" rel="noopener noreferrer">
+67:             https://ec.europa.eu/consumers/odr/
+68:           </a>
+69:           . Unsere E-Mail-Adresse finden Sie oben im Impressum.
+70:         </P>
+71:       </Section>
+72: 
+73:       <Section title="Verbraucherstreitbeilegung">
+74:         <P>
+75:           Wir sind nicht bereit und nicht verpflichtet, an Streitbeilegungsverfahren vor einer
+76:           Verbraucherschlichtungsstelle teilzunehmen.
+77:         </P>
+78:       </Section>
+79: 
+80:       <Section title="Haftung für Inhalte">
+81:         <P>
+82:           Als Diensteanbieter sind wir für eigene Inhalte auf diesen Seiten nach den allgemeinen
+83:           Gesetzen verantwortlich. Wir sind jedoch nicht verpflichtet, übermittelte oder
+84:           gespeicherte fremde Informationen zu überwachen oder nach Umständen zu forschen, die auf
+85:           eine rechtswidrige Tätigkeit hinweisen.

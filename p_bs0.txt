@@ -1,0 +1,82 @@
+1: // Batch-Import per Foto: ein Foto einer Binder-Seite (z. B. 3×3) wird in Felder zerlegt,
+2: // jedes Feld gescannt, gesucht und geprüft.
+3: // Danach kannst du die Treffer kontrollieren und alle auf einmal in die Collection legen.
+4: import React, { useState, useRef, useEffect } from 'react';
+5: import { readCard, loadImageSource } from './CardScanner';
+6: import { coverRect, buildQuery } from './scanParse';
+7: import { rankByImage } from './imageMatch';
+8: import { watchPrice } from './priceData';
+9: import { OwnedBadge } from './Backup';
+10: 
+11: const VARIANT_LABEL = { normal: 'Normal', reverse: 'Reverse Holo', holo: 'Holo', firstEdition: '1st Edition' };
+12: // Welche Varianten gibt es für die Karte? (TCGdex-Flags; ohne Angabe nur Normal)
+13: const availKeys = (card) => {
+14:   const f = card && card.variants;
+15:   if (!f) return ['normal'];
+16:   const keys = Object.keys(VARIANT_LABEL).filter((k) => f[k]);
+17:   return keys.length ? keys : ['normal'];
+18: };
+19: // Gewünschte (erkannte oder gewählte) Variante, falls es sie gibt – sonst die erste verfügbare
+20: const effVariant = (c, card) => {
+21:   const keys = availKeys(card);
+22:   return c.variant && keys.includes(c.variant) ? c.variant : keys[0];
+23: };
+24: 
+25: const plain = (n) => String(n || '').replace(/\s*\[.*\]\s*$/, '');
+26: const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
+27: 
+28: // Raster über das Foto legen (trim = Rand in %, der auf allen Seiten abgeschnitten wird)
+29: function cellRects(w, h, rows, cols, trim) {
+30:   const tx = (w * trim) / 100;
+31:   const ty = (h * trim) / 100;
+32:   const cw = (w - 2 * tx) / cols;
+33:   const ch = (h - 2 * ty) / rows;
+34:   const out = [];
+35:   for (let r = 0; r < rows; r += 1) {
+36:     for (let c = 0; c < cols; c += 1) out.push({ x: tx + c * cw, y: ty + r * ch, w: cw, h: ch });
+37:   }
+38:   return out;
+39: }
+40: 
+41: // Aus einem Feld das größte mittige 5:7-Rechteck (Kartenformat) ausschneiden
+42: function cellCanvas(source, rect) {
+43:   const { sx, sy, sw } = coverRect(rect.w, rect.h);
+44:   const sh = (sw * 7) / 5;
+45:   const outW = Math.min(800, Math.round(sw));
+46:   const c = document.createElement('canvas');
+47:   c.width = outW;
+48:   c.height = Math.round((outW * 7) / 5);
+49:   c.getContext('2d').drawImage(source, rect.x + sx, rect.y + sy, sw, Math.min(sh, rect.h), 0, 0, c.width, c.height);
+50:   return c;
+51: }
+52: 
+53: function smallThumb(canvas) {
+54:   const c = document.createElement('canvas');
+55:   c.width = 140;
+56:   c.height = 196;
+57:   c.getContext('2d').drawImage(canvas, 0, 0, 140, 196);
+58:   try { return c.toDataURL('image/jpeg', 0.6); } catch (e) { return ''; }
+59: }
+60: 
+61: export default function BatchScanner({ onClose, onSearch, onAdd, Img, api, conditions, languages, defaultCondition, defaultLanguage, owned }) {
+62:   const [step, setStep] = useState('setup'); // setup | review
+63:   const [photo, setPhoto] = useState(null); // { url, w, h, source }
+64:   const [rows, setRows] = useState(3);
+65:   const [cols, setCols] = useState(3);
+66:   const [trim, setTrim] = useState(3);
+67:   const [cells, setCells] = useState([]);
+68:   const [running, setRunning] = useState(false);
+69:   const [progress, setProgress] = useState('');
+70:   const [error, setError] = useState('');
+71:   const [cond, setCond] = useState(defaultCondition);
+72:   const [lang, setLang] = useState(defaultLanguage);
+73:   const [adding, setAdding] = useState(false);
+74: 
+75:   const aliveRef = useRef(true);
+76:   const canvases = useRef([]);
+77:   const urlRef = useRef(null);
+78: 
+79:   useEffect(() => {
+80:     aliveRef.current = true;
+81:     return () => {
+82:       aliveRef.current = false;

@@ -1,0 +1,65 @@
+
+// Mit einer automatischen Wiederholung (nach 3 s) bei Überlastung/Netzfehler
+export const readCard = async (base64Image, api = API_URL, { retries = 1 } = {}) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readCardOnce(base64Image, api);
+    } catch (e) {
+      if (!e.busy || attempt >= retries) throw e;
+      await sleep(3000);
+    }
+  }
+};
+
+// Foto verkleinern (schneller Upload, unter dem 10-MB-Limit des Servers)
+function shrinkToCanvas(source, w, h, maxSide = 900) {
+  const scale = Math.min(1, maxSide / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * scale);
+  c.height = Math.round(h * scale);
+  c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+  return c;
+}
+
+// ==========================================
+// Scan-Verlauf mit „Rückgängig“ (auch in App.jsx unter der Collection genutzt)
+// ==========================================
+const hhmm = (ts) => new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+
+export function ScanHistory({ history = [], onUndo, onClear, Img, compact = false }) {
+  const [busyId, setBusyId] = useState(null);
+  if (!history.length || !onUndo) return null;
+  const Pic = Img || 'img';
+
+  const undo = async (entry) => {
+    if (busyId) return;
+    setBusyId(entry.docId);
+    try { await onUndo(entry); } finally { setBusyId(null); }
+  };
+
+  return (
+    <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-3 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-bold text-amber-300">🕘 Zuletzt gescannt ({history.length})</h3>
+        {onClear && !compact && <button onClick={onClear} className="text-[11px] text-slate-400 hover:text-slate-200 underline">Liste leeren</button>}
+      </div>
+      <ul className="space-y-1.5">
+        {history.slice(0, compact ? 5 : 30).map((h) => (
+          <li key={h.docId} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg p-1.5">
+            <Pic src={h.image} alt={h.name} className="w-8 rounded shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-200 truncate">{h.name}{h.number ? <span className="text-slate-500 font-normal"> #{h.number}</span> : null}</p>
+              <p className="text-[10px] text-slate-500 truncate">{h.set || 'Unbekanntes Set'} · {h.condition}{h.variant && h.variant !== 'normal' ? ` · ${h.variant === 'reverse' ? 'Reverse Holo' : h.variant === 'holo' ? 'Holo' : h.variant}` : ''} · {hhmm(h.at)}</p>
+            </div>
+            <button
+              onClick={() => undo(h)}
+              disabled={!!busyId}
+              className="shrink-0 text-[11px] font-black px-2.5 py-1 rounded-lg border bg-slate-900 text-rose-300 border-rose-500/40 hover:bg-rose-500 hover:text-slate-950 disabled:opacity-50"
+            >{busyId === h.docId ? '…' : '↩ Rückgängig'}</button>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[10px] text-slate-500">Rückgängig löscht den Eintrag wieder aus der Collection{compact ? '' : ' (stammt die Karte von der Watchlist, kommt sie dorthin zurück)'}.</p>
+    </div>
+  );
+}

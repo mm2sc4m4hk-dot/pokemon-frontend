@@ -1,0 +1,5 @@
+9: const Section = ({ title, children }) => (
+16: const P = ({ children }) => <p>{children}</p>;
+18: export function LegalShell({ title, children }) {
+41: export function ImpressumPage() {
+122: export function DatenschutzPage() {

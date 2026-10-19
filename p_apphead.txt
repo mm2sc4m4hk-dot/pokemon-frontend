@@ -1,0 +1,45 @@
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  collection as fsCollection,
+  doc,
+  addDoc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  writeBatch
+} from 'firebase/firestore';
+import { auth, db } from './firebase';
+import { BRAND_NAME, Disclaimer } from './brand';
+import { LoginScreen, AccountPanel } from './AuthScreens';
+import { resolveRedirectOutcome } from './authRedirect';
+import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
+import { fetchPrices } from './priceData';
+import { CardHistoryChart, WeeklyMovers, PushToggle, OutlierBadge } from './Insights';
+import { BinderCompletion } from './Completion';
+import CardScanner, { ScanHistory } from './CardScanner';
+import { SetsView } from './SetsMaster';
+import { SharePanel, BackupPanel, WantlistExport, SharedView, OwnedBadge, buildOwnedMap } from './Backup';
+import BatchScanner from './BatchScanner';
+import { SellAllCalculator, PortfolioSplit, RecordSaleModal, SalesHistory, NewSetsBanner, TradeCalculator, SellerPlanner } from './Features';
+import { BudgetPlanner, DataQualityCheck } from './Tools';
+
+const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
+
+const LANGUAGES = [
+  { name: 'Deutsch 🇩🇪', factor: 1.0 },
+  { name: 'Englisch 🇬🇧', factor: 1.1 },
+  { name: 'Japanisch 🇯🇵', factor: 0.8 },
+  { name: 'Chinesisch 🇨🇳', factor: 0.65 },
+  { name: 'Koreanisch 🇰🇷', factor: 0.5 },
+  { name: 'Französisch 🇫🇷', factor: 0.9 },
+  { name: 'Spanisch 🇪🇸', factor: 0.9 },
+  { name: 'Italienisch 🇮🇹', factor: 0.9 }
+];
+
+const CONDITIONS = [
+  { name: 'Mint', factor: 1.25, label: 'Mint (Makellos, +25%)' },
+  { name: 'Near Mint', factor: 1.0, label: 'Near Mint (Standard)' },
+  { name: 'Excellent', factor: 0.85, label: 'Excellent (-15%)' },
+  { name: 'Good', factor: 0.70, label: 'Good (-30%)' },

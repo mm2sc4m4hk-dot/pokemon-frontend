@@ -1,0 +1,115 @@
+86:         </P>
+87:       </Section>
+88: 
+89:       <Section title="Haftung für Links">
+90:         <P>
+91:           Unser Angebot enthält Links zu externen Websites Dritter, auf deren Inhalte wir keinen
+92:           Einfluss haben. Für diese fremden Inhalte kann keine Gewähr übernommen werden. Zum
+93:           Zeitpunkt der Verlinkung waren keine rechtswidrigen Inhalte erkennbar. Bei Bekanntwerden
+94:           von Rechtsverletzungen werden entsprechende Links umgehend entfernt.
+95:         </P>
+96:       </Section>
+97: 
+98:       <Section title="Urheberrecht">
+99:         <P>
+100:           Die durch uns erstellten Inhalte und Werke auf diesen Seiten unterliegen dem deutschen
+101:           Urheberrecht. Beiträge Dritter sind als solche gekennzeichnet. Vervielfältigung, Bearbeitung,
+102:           Verbreitung und jede Art der Verwertung außerhalb der Grenzen des Urheberrechts bedürfen
+103:           unserer schriftlichen Zustimmung. Downloads und Kopien dieser Seite sind nur für den privaten,
+104:           nicht kommerziellen Gebrauch gestattet.
+105:         </P>
+106:       </Section>
+107: 
+108:       <Section title="Marken- und Fan-Hinweis">
+109:         <P>
+110:           {BRAND_NAME} ist ein inoffizielles Fan-Projekt. Es besteht keine Verbindung zu The Pokémon
+111:           Company, Nintendo oder Creatures Inc. Alle genannten Marken, Logos und Produktnamen sind
+112:           Eigentum ihrer jeweiligen Inhaber und dienen nur der Kennzeichnung.
+113:         </P>
+114:       </Section>
+115:     </LegalShell>
+116:   );
+117: }
+118: 
+119: 
+120: // ---------------------------------------------------------------------
+121: // Datenschutzerklärung
+122: // ---------------------------------------------------------------------
+123: export function DatenschutzPage() {
+124:   return (
+125:     <LegalShell title="Datenschutz">
+126:       <h1 className="text-2xl font-black text-white">Datenschutzerklärung</h1>
+127:       <p className="text-xs text-slate-500">Stand: Januar 2026</p>
+128: 
+129:       <Section title="1. Datenschutz auf einen Blick">
+130:         <P>
+131:           Die folgenden Hinweise geben einen einfachen Überblick darüber, was mit Ihren personenbezogenen
+132:           Daten passiert, wenn Sie diese Website bzw. App besuchen und nutzen. Personenbezogene Daten
+133:           sind alle Daten, mit denen Sie persönlich identifiziert werden können. Ausführliche
+134:           Informationen zum Thema Datenschutz entnehmen Sie dieser Datenschutzerklärung.
+135:         </P>
+136:         <P>
+137:           <strong className="text-slate-100">Datenerfassung auf dieser Website / App:</strong> Die
+138:           Datenverarbeitung auf dieser Website/App erfolgt durch den Betreiber. Dessen Kontaktdaten
+139:           können Sie dem Abschnitt „Hinweis zur verantwortlichen Stelle“ in dieser
+140:           Datenschutzerklärung entnehmen.
+141:         </P>
+142:         <P>
+143:           Ihre Daten werden zum einen dadurch erhoben, dass Sie uns diese mitteilen (z. B. bei der
+144:           Erstellung eines Nutzerkontos oder dem Hochladen von Bildern zur KI-Analyse). Andere Daten
+145:           werden automatisch beim Besuch der Website durch unsere IT-Systeme erfasst. Das sind vor
+146:           allem technische Daten (z. B. Internetbrowser, Betriebssystem, IP-Adresse oder Uhrzeit des
+147:           Seitenaufrufs).
+148:         </P>
+149:         <P>
+150:           Ein Teil der Daten wird erhoben, um eine fehlerfreie Bereitstellung der App-Funktionen
+151:           (wie Authentifizierung, Verwaltung Ihrer Sammlungen und automatische Bild-Analysen) zu
+152:           gewährleisten. Wir nutzen keine Tracking- oder Analyse-Tools zur Auswertung Ihres
+153:           Nutzerverhaltens.
+154:         </P>
+155:         <P>
+156:           Sie haben jederzeit das Recht, unentgeltelt Auskunft über Herkunft, Empfänger und Zweck Ihrer
+157:           gespeicherten personenbezogenen Daten zu erhalten. Sie haben außerdem ein Recht, die
+158:           Berichtigung oder Löschung dieser Daten zu verlangen. Wenn Sie eine Einwilligung zur
+159:           Datenverarbeitung erteilt haben, können Sie diese jederzeit für die Zukunft widerrufen.
+160:           Außerdem steht Ihnen ein Beschwerderecht bei der zuständigen Aufsichtsbehörde zu.
+161:         </P>
+162:       </Section>
+163: 
+164:       <Section title="2. Hosting und Infrastruktur">
+165:         <P>
+166:           Wir hosten die Inhalte unserer Website und die Backend-Infrastruktur bei folgenden externen
+167:           Anbietern:
+168:         </P>
+169:         <P>
+170:           <strong className="text-slate-100">Vercel</strong> – Anbieter: Vercel Inc., 340 S Lemon Ave
+171:           #4133, Walnut, CA 91789, USA. Zweck: Bereitstellung und Hosting der App-Oberfläche
+172:           (Frontend). Rechtsgrundlage: Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse an einer
+173:           sicheren und schnellen Bereitstellung unseres Online-Angebots). Drittlandübermittlung:
+174:           Vercel verarbeitet Daten unter anderem in den USA. Die Datenübermittlung wird auf das
+175:           EU-US Data Privacy Framework (DPF) sowie Standardvertragsklauseln der EU-Kommission gestützt.
+176:         </P>
+177:         <P>
+178:           <strong className="text-slate-100">Render</strong> – Anbieter: Render Services, Inc., 548
+179:           Market St, PMB 62453, San Francisco, CA 94104, USA. Zweck: Hosting der
+180:           Backend-Anwendungslogik und API-Schnittstellen. Rechtsgrundlage: Art. 6 Abs. 1 lit. f DSGVO
+181:           (berechtigtes Interesse an der Bereitstellung einer funktionstüchtigen
+182:           Server-Infrastruktur). Drittlandübermittlung: Die Übermittlung in die USA erfolgt auf Basis
+183:           des EU-US Data Privacy Frameworks (DPF) und Standardvertragsklauseln.
+184:         </P>
+185: 
+186:       <Section title="3. Allgemeine Hinweise und Pflichtinformationen">
+187:         <P>
+188:           Die Betreiber dieser Seiten nehmen den Schutz Ihrer persönlichen Daten sehr ernst. Wir
+189:           behandeln Ihre personenbezogenen Daten vertraulich und entsprechend den gesetzlichen
+190:           Datenschutzvorschriften sowie dieser Datenschutzerklärung. Wir weisen darauf hin, dass die
+191:           Datenübertragung im Internet Sicherheitslücken aufweisen kann.
+192:         </P>
+193:         <P>
+194:           <strong className="text-slate-100">Hinweis zur verantwortlichen Stelle:</strong> Die
+195:           verantwortliche Stelle für die Datenverarbeitung auf dieser Website ist: Leon Mertz,
+196:           Nelkenweg 6, 40882 Ratingen, Telefon: +49 1709094830, E-Mail: poketracker0203@gmail.com.
+197:         </P>
+198:         <P>
+199:           <strong className="text-slate-100">Speicherdauer:</strong> Soweit innerhalb dieser
+200:           Datenschutzerklärung keine speziellere Speicherdauer genannt wurde, verbleiben Ihre
