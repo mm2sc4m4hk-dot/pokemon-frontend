@@ -8,6 +8,7 @@ import { rankByImage } from './imageMatch';
 import { watchPrice } from './priceData';
 import { OwnedBadge } from './Backup';
 import { auth } from './firebase';
+import { notifyQuotaChanged } from './config';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
 
@@ -51,9 +52,22 @@ async function readCardOnce(base64Image, api) {
     });
     const data = await response.json().catch(() => ({}));
     if (response.status === 401) { const e = new Error('Anmeldung abgelaufen oder ungültig. Bitte neu anmelden.'); e.final = true; throw e; }
-    if (response.status === 429) { const e = new Error('Zu viele Scans auf einmal. Bitte kurz warten.'); e.final = true; throw e; }
+    if (response.status === 429) {
+      // Zwei verschiedene 429: Monatskontingent des Kontos (code quota_exceeded)
+      // oder kurzfristiges Rate-Limit des Servers.
+      if (data.code === 'quota_exceeded') {
+        notifyQuotaChanged();
+        const e = new Error(data.error || 'Dein monatliches Scan-Kontingent ist aufgebraucht.');
+        e.final = true;
+        e.quota = true;
+        throw e;
+      }
+      const e = new Error('Zu viele Scans auf einmal. Bitte kurz warten.'); e.final = true; throw e;
+    }
     if (response.status === 503) { const e = new Error('Der Scan ist gerade ausgelastet. Bitte warte kurz und scanne erneut.'); e.busy = true; throw e; }
     if (!response.ok) { const e = new Error(data.error || `Fehler beim Scannen (Status ${response.status}).`); e.final = true; throw e; }
+    // Kontingent-Zähler im Profil aktualisieren
+    notifyQuotaChanged();
     return data;
   } catch (e) {
     if (e.name === 'AbortError') { const t = new Error('Der Server hat nicht geantwortet (schläft evtl.). Bitte gleich nochmal versuchen.'); t.busy = true; throw t; }

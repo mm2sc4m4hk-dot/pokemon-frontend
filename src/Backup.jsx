@@ -478,7 +478,7 @@ export function SharedView({ token, Img }) {
             )}
           </>
         )}
-        <Disclaimer className="pt-6 pb-4" />
+        <Footer className="pt-6 pb-4" />
       </main>
     </div>
   );

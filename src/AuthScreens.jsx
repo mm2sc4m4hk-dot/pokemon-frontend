@@ -304,7 +304,7 @@ export function LoginScreen({ onDone }) {
           )}
         </div>
       </div>
-      <Disclaimer className="mt-6 max-w-md px-2" />
+      <Footer className="mt-6 max-w-md px-2" />
     </div>
   );
 }
@@ -405,6 +405,246 @@ export function AccountPanel() {
       </div>
 
       {msg.text && <p className={`text-xs ${msg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400'}`}>{msg.text}</p>}
+
+      <ScanQuota />
+
+      <DeleteAccount user={user} />
     </div>
   );
 }
+
+// ---------------------------------------------------------------------
+// Monatliches Scan-Kontingent (Anzeige im Profil)
+// ---------------------------------------------------------------------
+// Der Zähler liegt ausschließlich serverseitig (Collection scanUsage) und ist
+// für Clients schreibgeschützt. Der Client liest seinen Stand nur über
+// GET /api/scan-usage – so kann niemand den Zähler selbst zurücksetzen.
+function ScanQuota() {
+  const [state, setState] = useState({ loading: true, used: 0, limit: 25, remaining: 25, resetAt: '', error: '' });
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const user = auth.currentUser;
+      if (!user) return;
+      try {
+        const token = await user.getIdToken();
+        const res = await fetch(`${API_URL}/api/scan-usage`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        const data = await res.json();
+        if (!active) return;
+        setState({
+          loading: false,
+          used: Number(data.used) || 0,
+          limit: Number(data.limit) || 25,
+          remaining: Number(data.remaining) || 0,
+          resetAt: data.resetAt || '',
+          error: ''
+        });
+      } catch (e) {
+        if (active) setState((s) => ({ ...s, loading: false, error: 'Kontingent konnte nicht geladen werden.' }));
+      }
+    };
+    load();
+    window.addEventListener(QUOTA_CHANGED_EVENT, load);
+    window.addEventListener('focus', load);
+    return () => {
+      active = false;
+      window.removeEventListener(QUOTA_CHANGED_EVENT, load);
+      window.removeEventListener('focus', load);
+    };
+  }, []);
+
+  const { used, limit, remaining, resetAt, loading, error } = state;
+  const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+  const resetText = resetAt
+    ? new Date(resetAt).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : '';
+
+  return (
+    <div className="pt-3 border-t border-slate-800 space-y-1.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-xs font-bold text-slate-300">📷 KI-Scans diesen Monat</p>
+        <p className={`text-xs font-black ${remaining === 0 && !loading ? 'text-rose-400' : 'text-cyan-400'}`}>
+          {loading ? '…' : `${used} / ${limit}`}
+        </p>
+      </div>
+      <div className="h-1.5 rounded-full bg-slate-950 overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${remaining === 0 ? 'bg-rose-500' : 'bg-cyan-500'}`} style={{ width: `${pct}%` }} />
+      </div>
+      <p className="text-[10px] text-slate-500">
+        {error
+          ? error
+          : remaining === 0
+            ? `Aufgebraucht${resetText ? ` – Reset am ${resetText}` : ''}.`
+            : `${remaining} Scan${remaining === 1 ? '' : 's'} übrig${resetText ? ` · Reset am ${resetText}` : ''}.`}
+      </p>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------
+// Konto löschen (Art. 17 DSGVO)
+// ---------------------------------------------------------------------
+// Ablauf:
+//   1. Bestätigung durch Eintippen von „LÖSCHEN“ (verhindert Fehlklicks)
+//   2. Re-Authentifizierung (Passwort bzw. Google-Popup), damit niemand mit
+//      einer offenen Sitzung das Konto löscht
+//   3. ID-Token an POST /api/delete-account: dort löscht der Server alles
+//      (Firestore inkl. Untercollectionen, Storage, Kontingent, zuletzt den
+//      Auth-User). Der Client kann Subcollections nicht rekursiv löschen.
+const CONFIRM_WORD = 'LÖSCHEN';
+
+function DeleteAccount({ user }) {
+  const [open, setOpen] = useState(false);
+  const [confirm, setConfirm] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const hasPassword = user.providerData.some((p) => p.providerId === 'password');
+
+  const close = () => {
+    if (busy) return;
+    setOpen(false); setConfirm(''); setPassword(''); setError('');
+  };
+
+  // Frische Anmeldung: der Server prüft auth_time bzw. den letzten Sign-in.
+  const reauth = async () => {
+    if (hasPassword) {
+      if (!password) throw new Error('Bitte dein Passwort eingeben.');
+      await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
+      return;
+    }
+    if (isStandalone()) {
+      throw new Error('Bitte melde dich ab und neu an – in der installierten App ist kein Anmeldefenster möglich.');
+    }
+    try {
+      await reauthenticateWithPopup(user, googleProvider());
+    } catch (e) {
+      if (POPUP_PROBLEMS.includes(e.code)) {
+        throw new Error('Das Anmeldefenster wurde blockiert. Bitte Pop-ups erlauben oder dich ab- und neu anmelden.');
+      }
+      throw e;
+    }
+  };
+
+
+  const remove = async () => {
+    setError('');
+    if (confirm.trim().toUpperCase() !== CONFIRM_WORD) {
+      setError(`Zum Löschen bitte „${CONFIRM_WORD}“ eintippen.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      await reauth();
+      const token = await user.getIdToken(true);
+      const res = await fetch(`${API_URL}/api/delete-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ confirm: CONFIRM_WORD })
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.status === 401 && data.code === 'reauth_required') {
+        setError(data.error || 'Bitte melde dich zur Sicherheit neu an und versuche es erneut.');
+        return;
+      }
+      if (!res.ok) {
+        setError(data.error || `Löschen fehlgeschlagen (Status ${res.status}).`);
+        return;
+      }
+
+      // Konto ist serverseitig gelöscht: Sitzung beenden und zur Startseite.
+      await signOut(auth).catch(() => {});
+      await navigate('/');
+      window.scrollTo(0, 0);
+    } catch (e) {
+      console.error('Konto-Löschung fehlgeschlagen:', e.code, e.message);
+      if (e.code && String(e.code).startsWith('auth/')) setError(authErrorMessage(e.code));
+      else setError(e.message || 'Löschen fehlgeschlagen.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fieldCls = 'w-full bg-slate-950 border border-slate-700 focus:border-rose-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors';
+
+  return (
+    <div className="pt-3 border-t border-slate-800 space-y-2">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="text-[11px] font-bold text-rose-300 border border-rose-500/40 rounded-lg px-3 py-1.5 hover:bg-rose-500 hover:text-slate-950 transition-colors"
+        >
+          Konto löschen
+        </button>
+      ) : (
+        <div className="bg-rose-500/5 border border-rose-500/40 rounded-xl p-3 space-y-2">
+          <h4 className="text-xs font-black text-rose-300">Konto endgültig löschen</h4>
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            Gelöscht werden Sammlung, Watchlist, Binder, Verkaufs- und Wertverlaufsdaten, deine
+            Freigabe-Links, dein Scan-Zähler und dein Anmeldekonto. Das lässt sich
+            <strong className="text-slate-200"> nicht rückgängig</strong> machen. Sicherungskopien
+            können aus technischen Gründen kurzzeitig noch bestehen (siehe Datenschutzerklärung).
+          </p>
+
+          {hasPassword ? (
+            <div>
+              <label className="text-[11px] font-bold text-slate-300 block mb-1">Passwort bestätigen</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                className={fieldCls}
+                placeholder="Dein Passwort"
+              />
+            </div>
+          ) : (
+            <p className="text-[11px] text-slate-400">Zur Bestätigung öffnet sich das Google-Anmeldefenster.</p>
+          )}
+
+          <div>
+            <label className="text-[11px] font-bold text-slate-300 block mb-1">
+              Zum Bestätigen „{CONFIRM_WORD}“ eintippen
+            </label>
+            <input
+              type="text"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              autoCapitalize="characters"
+              className={fieldCls}
+              placeholder={CONFIRM_WORD}
+            />
+          </div>
+
+          {error && <p className="text-[11px] text-rose-400">{error}</p>}
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={remove}
+              className="text-[11px] font-black px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white disabled:opacity-50 transition-colors"
+            >
+              {busy ? 'Wird gelöscht …' : 'Endgültig löschen'}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={close}
+              className="text-[11px] font-bold px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 disabled:opacity-50 transition-colors"
+            >
+              Abbrechen
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+

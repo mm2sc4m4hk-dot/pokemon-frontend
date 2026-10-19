@@ -11,7 +11,8 @@ import {
   writeBatch
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { BRAND_NAME, Disclaimer } from './brand';
+import { BRAND_NAME, Footer } from './brand';
+import { KOFI_URL } from './config';
 import { LoginScreen, AccountPanel } from './AuthScreens';
 import { resolveRedirectOutcome } from './authRedirect';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
@@ -26,6 +27,26 @@ import { SellAllCalculator, PortfolioSplit, RecordSaleModal, SalesHistory, NewSe
 import { BudgetPlanner, DataQualityCheck } from './Tools';
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://pokemon-backend-x7l7.onrender.com';
+
+function SupportCard() {
+  return (
+    <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl text-center space-y-2">
+      <h3 className="font-bold text-slate-100 text-sm">☕ {BRAND_NAME} unterstützen</h3>
+      <p className="text-[11px] text-slate-400">
+        Die App ist kostenlos. Server und Scanner verursachen aber Kosten – wenn sie dir gefällt, freue ich mich über einen Kaffee.
+      </p>
+      <a
+        href={KOFI_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-block bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black text-xs px-4 py-2 rounded-lg transition-colors"
+      >
+        ☕ Auf Ko-fi spenden
+      </a>
+    </div>
+  );
+}
+
 
 const LANGUAGES = [
   { name: 'Deutsch 🇩🇪', factor: 1.0 },
@@ -1559,8 +1580,15 @@ useEffect(() => {
 
       <header className="sticky top-0 z-30 bg-slate-900/90 backdrop-blur-md border-b border-cyan-500/20 px-4 py-3 flex items-center justify-between shadow-md">
         <span className="text-cyan-400 text-xl font-black tracking-wider">⚡ {BRAND_NAME}</span>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           <span className="text-xs text-slate-400 hidden sm:inline">{currentUser}</span>
+          <a
+            href={KOFI_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Auf Ko-fi unterstützen"
+            className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-cyan-400 transition-colors"
+          >☕</a>
           <button onClick={handleLogout} className="text-xs bg-slate-800 px-3 py-1.5 rounded-lg text-slate-300 hover:text-rose-400 transition-colors">Abmelden</button>
         </div>
       </header>
@@ -1648,9 +1676,6 @@ useEffect(() => {
               onEdit={openEditCard}
             />
 
-            <AccountPanel />
-
-            <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} api={API_URL} />
             <BackupPanel
               collection={collection}
               watchlist={watchlist}
@@ -1660,6 +1685,7 @@ useEffect(() => {
               calculatePrice={calculatePrice}
               isAutoPrice={isAutoPrice}
             />
+            <SupportCard />
           </div>
         )}
 
@@ -2148,7 +2174,7 @@ useEffect(() => {
             </div>
           </div>
         )}
-        <Disclaimer className="mt-8 mb-2 px-4" />
+        <Footer className="mt-8 mb-2" />
       </main>
 
       <nav className="fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 backdrop-blur-md border-t border-cyan-500/20 px-6 py-2 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
