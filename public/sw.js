@@ -1,7 +1,7 @@
 // Minimaler Service Worker – vor allem nötig, damit Chrome/Android die App
 // überhaupt als "installierbar" (Zum Startbildschirm hinzufügen) erkennt.
 // iOS Safari braucht das technisch nicht, ignoriert es aber auch nicht.
-const CACHE_NAME = 'poketracker-shell-v1';
+const CACHE_NAME = 'tcg-vault-shell-v1';
 const APP_SHELL = ['/', '/index.html', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
@@ -33,11 +33,11 @@ self.addEventListener('fetch', (event) => {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; }
-  catch (e) { data = { title: 'PokéTracker', body: event.data ? event.data.text() : '' }; }
+  catch (e) { data = { title: 'TCG Vault', body: event.data ? event.data.text() : '' }; }
 
-  event.waitUntil(self.registration.showNotification(data.title || 'PokéTracker', {
+  event.waitUntil(self.registration.showNotification(data.title || 'TCG Vault', {
     body: data.body || '',
-    tag: data.tag || 'poketracker',
+    tag: data.tag || 'tcg-vault',
     renotify: true,
     // icon: '/icon-192.png',   // optional: Pfad zu deinem App-Icon
     data: { url: data.url || '/' }

@@ -1,7 +1,7 @@
 {
-  "name": "PokéTracker",
-  "short_name": "PokéTracker",
-  "description": "Verwalte deine Pokémon-Kartensammlung: Collection, Watchlist und Marktwerte im Blick.",
+  "name": "TCG Vault",
+  "short_name": "TCG Vault",
+  "description": "Verwalte deine Kartensammlung: Collection, Watchlist und Marktwerte im Blick.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -4,8 +4,8 @@
 //
 // authDomain steht fest auf der Produktions-Domain (Google-Login per Redirect). Dafür nötig:
 //  - vercel.json mit den Rewrites für /__/auth/ und /__/firebase/
-//  - Google Cloud Console -> OAuth-Client: Weiterleitungs-URI https://pokemon-frontend-blond.vercel.app/__/auth/handler
-//  - Firebase Console -> Authentication -> Authorized domains: pokemon-frontend-blond.vercel.app
+//  - Google Cloud Console -> OAuth-Client: Weiterleitungs-URI https://tcg-vault-blond.vercel.app/__/auth/handler
+//  - Firebase Console -> Authentication -> Authorized domains: tcg-vault-blond.vercel.app
 
 import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
@@ -13,7 +13,7 @@ import { initializeFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
   apiKey: "AIzaSyA9vq-yuzUcR9yxaDwxIjhzrCqlf4_-q-A",
-  authDomain: "pokemon-frontend-blond.vercel.app",
+  authDomain: "tcg-vault-blond.vercel.app",
   projectId: "pokemon-signin",
   storageBucket: "pokemon-signin.firebasestorage.app",
   messagingSenderId: "459900531776",
