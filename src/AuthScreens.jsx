@@ -62,7 +62,6 @@ const isStandalone = () =>
   (typeof navigator !== 'undefined' && navigator.standalone === true);
 
 const inputCls = 'w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 rounded-xl px-4 py-3 outline-none text-white transition-all';
-const smallInputCls = 'w-full bg-slate-950 border border-slate-700 focus:border-cyan-500 text-slate-100 rounded-lg px-3 py-2 text-sm outline-none';
 
 // ---------------------------------------------------------------------
 // Login-Screen
