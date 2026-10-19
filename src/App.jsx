@@ -561,11 +561,15 @@ useEffect(() => {
     // Redirect-Ergebnis (Google-Login) zuerst auflösen, danach den Auth-State
     // beobachten. Andernfalls kann onAuthStateChanged den noch nicht
     // übernommenen Redirect-Login als "nicht angemeldet" behandeln.
+    //
+    // Sicherheitsnetz: Hängt getRedirectResult (z. B. Netzwerkproblem), darf
+    // die App nicht dauerhaft im Ladebildschirm hängen. Nach 8 Sekunden wird
+    // der Auth-State auch ohne Redirect-Ergebnis aufgebaut.
     let unsubAuth = null;
     let cancelled = false;
 
-    resolveRedirectOutcome().then(() => {
-      if (cancelled) return;
+    const startAuthListener = () => {
+      if (cancelled || unsubAuth) return;
       unsubAuth = onAuthStateChanged(auth, (user) => {
         unsubscribers.current.forEach((u) => u());
         unsubscribers.current = [];
@@ -633,6 +637,12 @@ useEffect(() => {
         }
         setAuthLoading(false);
       });
+    };
+
+    // Redirect-Ergebnis abwarten – aber nicht unbegrenzt.
+    const timeout = new Promise((resolve) => setTimeout(resolve, 8000));
+    Promise.race([resolveRedirectOutcome(), timeout]).then(() => {
+      startAuthListener();
     });
 
     return () => {
