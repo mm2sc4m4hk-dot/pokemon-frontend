@@ -14,12 +14,12 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   signInWithRedirect,
-  getRedirectResult,
   linkWithPopup,
   linkWithRedirect
 } from 'firebase/auth';
 import { auth } from './firebase';
 import { BRAND_NAME, Disclaimer } from './brand';
+import { markRedirectPending, resolveRedirectOutcome } from './authRedirect';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 8;
@@ -40,6 +40,7 @@ const authErrorMessage = (code) => {
     case 'auth/configuration-not-found': return 'Diese Anmeldeart ist in Firebase noch nicht aktiviert (Authentication → Sign-in method).';
     case 'auth/unauthorized-domain': return 'Diese Domain ist in Firebase nicht freigegeben (Authentication → Settings → Authorized domains).';
     case 'auth/account-exists-with-different-credential': return 'Zu dieser E-Mail-Adresse gibt es schon ein Konto mit einer anderen Anmeldeart.';
+    case 'auth/credential': return 'Die Anmeldung konnte nicht abgeschlossen werden. Bitte lade die Seite neu (Strg+F5) und versuche es erneut.';
     case 'auth/credential-already-in-use': return 'Dieses Google-Konto gehört schon zu einem anderen ' + BRAND_NAME + '-Konto.';
     case 'auth/provider-already-linked': return 'Google ist mit diesem Konto schon verknüpft.';
     case 'auth/requires-recent-login': return 'Bitte melde dich zur Sicherheit neu an und versuche es dann erneut.';
@@ -56,6 +57,10 @@ const googleProvider = () => {
 
 const IGNORED = ['auth/popup-closed-by-user', 'auth/cancelled-popup-request'];
 const POPUP_PROBLEMS = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'];
+
+// Marker für Redirect-Login und Auswertung des Redirect-Ergebnisses liegen
+// zentral in ./authRedirect.js – dort wird getRedirectResult genau einmal
+// aufgerufen und das Ergebnis zwischen Login und Verknüpfung geteilt.
 
 const isStandalone = () =>
   (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
@@ -76,11 +81,25 @@ export function LoginScreen({ onDone }) {
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
 
-  // Fehler nach der Rückkehr vom Redirect anzeigen
+  // Ergebnis nach der Rückkehr vom Redirect (Google) auswerten.
+  // Ohne Redirect liefert getRedirectResult null – das ist normal und kein Fehler.
+  // Kamen wir per Redirect zurück und ist das Ergebnis trotzdem null, ist der
+  // Login stillschweigend verloren gegangen -> sichtbarer Hinweis statt Stille.
   useEffect(() => {
-    getRedirectResult(auth).catch((err) => {
-      if (!IGNORED.includes(err.code)) setError(authErrorMessage(err.code));
+    let active = true;
+    resolveRedirectOutcome().then(({ ok, result, error, cameBack }) => {
+      if (!active) return;
+      if (!ok) {
+        console.error('[Auth] redirect error:', error?.code, error?.message);
+        if (!IGNORED.includes(error?.code)) setError(authErrorMessage(error?.code));
+        return;
+      }
+      console.log('[Auth] redirect result:', result);
+      if (!result && cameBack) {
+        setError('Die Anmeldung konnte nicht abgeschlossen werden. Bitte erneut versuchen – hilfreich ist ein Neuladen ohne Cache (Strg+F5).');
+      }
     });
+    return () => { active = false; };
   }, []);
 
   const switchMode = (m) => {
@@ -142,6 +161,7 @@ export function LoginScreen({ onDone }) {
     try {
       // Installierte App: gleich Redirect, Popups gehen dort nicht zuverlässig
       if (isStandalone()) {
+        markRedirectPending();
         await signInWithRedirect(auth, provider);
         return;
       }
@@ -154,6 +174,7 @@ export function LoginScreen({ onDone }) {
       }
       if (POPUP_PROBLEMS.includes(err.code)) {
         try {
+          markRedirectPending();
           await signInWithRedirect(auth, provider);
           return;
         } catch (e2) {
@@ -288,11 +309,11 @@ export function LoginScreen({ onDone }) {
 // das Ergebnis holt der useEffect mit getRedirectResult in den Komponenten unten ab.
 async function linkGoogle(user) {
   const provider = googleProvider();
-  if (isStandalone()) { await linkWithRedirect(user, provider); return; }
+  if (isStandalone()) { markRedirectPending(); await linkWithRedirect(user, provider); return; }
   try {
     await linkWithPopup(user, provider);
   } catch (err) {
-    if (POPUP_PROBLEMS.includes(err.code)) { await linkWithRedirect(user, provider); return; }
+    if (POPUP_PROBLEMS.includes(err.code)) { markRedirectPending(); await linkWithRedirect(user, provider); return; }
     throw err;
   }
 }
@@ -300,9 +321,19 @@ async function linkGoogle(user) {
 // Meldung nach der Rückkehr von einem Google-Redirect (Verknüpfung)
 function useRedirectMessage(setMsg, okText) {
   useEffect(() => {
-    getRedirectResult(auth)
-      .then((res) => { if (res && res.operationType === 'link') setMsg({ type: 'ok', text: okText }); })
-      .catch((err) => { if (!IGNORED.includes(err.code)) setMsg({ type: 'err', text: authErrorMessage(err.code) }); });
+    let active = true;
+    resolveRedirectOutcome().then(({ ok, result, error, cameBack }) => {
+      if (!active) return;
+      if (!ok) {
+        console.error('[Auth] link redirect error:', error?.code, error?.message);
+        if (!IGNORED.includes(error?.code)) setMsg({ type: 'err', text: authErrorMessage(error?.code) });
+        return;
+      }
+      console.log('[Auth] link redirect result:', result);
+      if (result && result.operationType === 'link') setMsg({ type: 'ok', text: okText });
+      else if (!result && cameBack) setMsg({ type: 'err', text: 'Die Verknüpfung konnte nicht abgeschlossen werden. Bitte erneut versuchen.' });
+    });
+    return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }

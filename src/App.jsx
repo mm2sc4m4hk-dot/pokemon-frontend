@@ -13,6 +13,7 @@ import {
 import { auth, db } from './firebase';
 import { BRAND_NAME, Disclaimer } from './brand';
 import { LoginScreen, AccountPanel } from './AuthScreens';
+import { resolveRedirectOutcome } from './authRedirect';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
 import { CardHistoryChart, WeeklyMovers, PushToggle, OutlierBadge } from './Insights';
@@ -557,76 +558,86 @@ useEffect(() => {
   }, []);
 
   useEffect(() => {
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      unsubscribers.current.forEach((u) => u());
-      unsubscribers.current = [];
+    // Redirect-Ergebnis (Google-Login) zuerst auflösen, danach den Auth-State
+    // beobachten. Andernfalls kann onAuthStateChanged den noch nicht
+    // übernommenen Redirect-Login als "nicht angemeldet" behandeln.
+    let unsubAuth = null;
+    let cancelled = false;
 
-      if (user) {
-        setIsAuthenticated(true);
-        setCurrentUser(user.displayName || user.email?.split('@')[0] || 'Trainer');
+    resolveRedirectOutcome().then(() => {
+      if (cancelled) return;
+      unsubAuth = onAuthStateChanged(auth, (user) => {
+        unsubscribers.current.forEach((u) => u());
+        unsubscribers.current = [];
 
-        setCollectionReady(false);
-        setWatchlistReady(false);
-        setSnapshotsReady(false);
-        setSnapshotsDenied(false);
-        autoRefreshed.current = false;
-        setLastRefreshAt(Number(loadSetting('lastPriceRefresh:' + user.uid, '0')) || null);
+        if (user) {
+          setIsAuthenticated(true);
+          setCurrentUser(user.displayName || user.email?.split('@')[0] || 'Trainer');
 
-        const collRef = fsCollection(db, 'users', user.uid, 'collection');
-        const unsubColl = onSnapshot(collRef, (snap) => {
-          setCollection(snap.docs.map((d) => ({ ...d.data(), docId: d.id, instanceId: d.id })));
-          setCollectionReady(true);
-        }, (err) => {
-          console.warn('Collection nicht lesbar:', err.code);
-          setCollectionReady(true);
-        });
-
-        const watchRef = fsCollection(db, 'users', user.uid, 'watchlist');
-        const unsubWatch = onSnapshot(watchRef, (snap) => {
-          setWatchlist(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
-          setWatchlistReady(true);
-        }, (err) => {
-          console.warn('Watchlist nicht lesbar:', err.code);
-          setWatchlistReady(true);
-        });
-
-        const snapRef = fsCollection(db, 'users', user.uid, 'snapshots');
-        const unsubSnap = onSnapshot(snapRef, (snap) => {
-          setSnapshots(
-            snap.docs.map((d) => d.data())
-              .filter((s) => s.date && Number.isFinite(s.value))
-              .sort((a, b) => a.date.localeCompare(b.date))
-          );
+          setCollectionReady(false);
+          setWatchlistReady(false);
+          setSnapshotsReady(false);
           setSnapshotsDenied(false);
-          setSnapshotsReady(true);
-        }, (err) => {
-          console.warn('Wertverlauf nicht lesbar (Firestore-Regeln?):', err.code);
-          setSnapshotsDenied(true);
-          setSnapshotsReady(true);
-        });
+          autoRefreshed.current = false;
+          setLastRefreshAt(Number(loadSetting('lastPriceRefresh:' + user.uid, '0')) || null);
 
-        unsubscribers.current.push(unsubColl, unsubWatch, unsubSnap);
-      } else {
-        setIsAuthenticated(false);
-        setCurrentUser('');
-        setCollection([]);
-        setWatchlist([]);
-        setSnapshots([]);
-        setScanHistory([]);
-        setCollectionReady(false);
-        setWatchlistReady(false);
-        setSnapshotsReady(false);
-        setLastRefreshAt(null);
-        setRefreshMsg('');
-        autoRefreshed.current = false;
-        metaTried.current = false;
-        setMetaMsg('');
-      }
-      setAuthLoading(false);
+          const collRef = fsCollection(db, 'users', user.uid, 'collection');
+          const unsubColl = onSnapshot(collRef, (snap) => {
+            setCollection(snap.docs.map((d) => ({ ...d.data(), docId: d.id, instanceId: d.id })));
+            setCollectionReady(true);
+          }, (err) => {
+            console.warn('Collection nicht lesbar:', err.code);
+            setCollectionReady(true);
+          });
+
+          const watchRef = fsCollection(db, 'users', user.uid, 'watchlist');
+          const unsubWatch = onSnapshot(watchRef, (snap) => {
+            setWatchlist(snap.docs.map((d) => ({ ...d.data(), id: d.id })));
+            setWatchlistReady(true);
+          }, (err) => {
+            console.warn('Watchlist nicht lesbar:', err.code);
+            setWatchlistReady(true);
+          });
+
+          const snapRef = fsCollection(db, 'users', user.uid, 'snapshots');
+          const unsubSnap = onSnapshot(snapRef, (snap) => {
+            setSnapshots(
+              snap.docs.map((d) => d.data())
+                .filter((s) => s.date && Number.isFinite(s.value))
+                .sort((a, b) => a.date.localeCompare(b.date))
+            );
+            setSnapshotsDenied(false);
+            setSnapshotsReady(true);
+          }, (err) => {
+            console.warn('Wertverlauf nicht lesbar (Firestore-Regeln?):', err.code);
+            setSnapshotsDenied(true);
+            setSnapshotsReady(true);
+          });
+
+          unsubscribers.current.push(unsubColl, unsubWatch, unsubSnap);
+        } else {
+          setIsAuthenticated(false);
+          setCurrentUser('');
+          setCollection([]);
+          setWatchlist([]);
+          setSnapshots([]);
+          setScanHistory([]);
+          setCollectionReady(false);
+          setWatchlistReady(false);
+          setSnapshotsReady(false);
+          setLastRefreshAt(null);
+          setRefreshMsg('');
+          autoRefreshed.current = false;
+          metaTried.current = false;
+          setMetaMsg('');
+        }
+        setAuthLoading(false);
+      });
     });
 
     return () => {
-      unsubAuth();
+      cancelled = true;
+      if (unsubAuth) unsubAuth();
       unsubscribers.current.forEach((u) => u());
     };
   }, []);
