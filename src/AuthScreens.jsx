@@ -1,13 +1,9 @@
 // Echtes Login für TCG Vault (Firebase Authentication):
 //   LoginScreen         – Anmelden, Registrieren, Passwort vergessen, Google
-//   LegacyUpgradeBanner – nur für Altkonten (benutzername@poketracker.local): Konto sichern
 //   AccountPanel        – Konto-Karte im Profil (E-Mail, Bestätigung, Google verknüpfen, Passwort ändern)
 //
-// Importiert nichts aus App.jsx (kein Zirkelbezug). Die Daten bleiben unter users/{uid}/... in Firestore,
+// Importiert nichts aus App.jsx (kein Zirkellbezug). Die Daten bleiben unter users/{uid}/... in Firestore,
 // deshalb ändert sich an den Firestore-Regeln nichts.
-//
-// LEGACY: Alles, was mit LEGACY_DOMAIN zu tun hat, wird nur gebraucht, solange noch Altkonten existieren.
-// Wenn alle Konten gesichert sind, kannst du die mit "LEGACY" markierten Stellen löschen.
 import React, { useState, useEffect } from 'react';
 import {
   createUserWithEmailAndPassword,
@@ -20,16 +16,10 @@ import {
   signInWithRedirect,
   getRedirectResult,
   linkWithPopup,
-  linkWithRedirect,
-  EmailAuthProvider,
-  reauthenticateWithCredential,
-  verifyBeforeUpdateEmail
+  linkWithRedirect
 } from 'firebase/auth';
 import { auth } from './firebase';
 import { BRAND_NAME, Disclaimer } from './brand';
-
-const LEGACY_DOMAIN = '@poketracker.local'; // LEGACY
-export const isLegacyUser = (u) => !!u && !!u.email && u.email.toLowerCase().endsWith(LEGACY_DOMAIN); // LEGACY
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD = 8;
@@ -101,16 +91,14 @@ export function LoginScreen({ onDone }) {
   const login = async () => {
     const id = email.trim();
     if (!id || !password) { setError('Bitte E-Mail und Passwort eingeben.'); return; }
-    // LEGACY: Altkonten melden sich noch mit dem alten Benutzernamen an
-    const loginMail = id.includes('@') ? id : `${id.toLowerCase()}${LEGACY_DOMAIN}`;
-    await signInWithEmailAndPassword(auth, loginMail, password);
+    await signInWithEmailAndPassword(auth, id, password);
     if (onDone) onDone();
   };
 
   const register = async () => {
     const mail = email.trim();
     if (!EMAIL_RE.test(mail)) { setError('Bitte eine gültige E-Mail-Adresse eingeben.'); return; }
-    if (mail.toLowerCase().endsWith(LEGACY_DOMAIN)) { setError('Bitte eine echte E-Mail-Adresse verwenden.'); return; }
+    if (!EMAIL_RE.test(mail)) { setError('Bitte die E-Mail-Adresse deines Kontos eingeben.'); return; }
     if (password.length < MIN_PASSWORD) { setError(`Das Passwort braucht mindestens ${MIN_PASSWORD} Zeichen.`); return; }
     if (password !== confirm) { setError('Die Passwörter stimmen nicht überein.'); return; }
     const cred = await createUserWithEmailAndPassword(auth, mail, password);
@@ -122,11 +110,7 @@ export function LoginScreen({ onDone }) {
   const reset = async () => {
     const mail = email.trim();
     if (!EMAIL_RE.test(mail)) { setError('Bitte die E-Mail-Adresse deines Kontos eingeben.'); return; }
-    if (mail.toLowerCase().endsWith(LEGACY_DOMAIN)) {
-      // LEGACY
-      setError('An diese Platzhalter-Adresse kann keine Mail gehen. Melde dich mit deinem alten Benutzernamen an und sichere das Konto im Profil mit einer echten E-Mail-Adresse.');
-      return;
-    }
+    if (!EMAIL_RE.test(mail)) { setError('Bitte die E-Mail-Adresse deines Kontos eingeben.'); return; }
     try {
       await sendPasswordResetEmail(auth, mail);
     } catch (e) {
@@ -247,10 +231,7 @@ export function LoginScreen({ onDone }) {
               className={inputCls}
               placeholder="name@beispiel.de"
             />
-            {mode === 'login' && (
-              // LEGACY
-              <p className="text-[10px] text-slate-500 mt-1 ml-1">Altes Konto? Hier weiter den alten Benutzernamen eintragen.</p>
-            )}
+            
           </div>
           {!isReset && (
             <div>
@@ -327,81 +308,7 @@ function useRedirectMessage(setMsg, okText) {
   }, []);
 }
 
-// ---------------------------------------------------------------------
-// LEGACY: Banner für Altkonten (benutzername@poketracker.local)
-// ---------------------------------------------------------------------
-export function LegacyUpgradeBanner() {
-  const user = auth.currentUser;
-  const [newMail, setNewMail] = useState('');
-  const [oldPw, setOldPw] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState({ type: '', text: '' });
-  const [, rerender] = useState(0);
-  useRedirectMessage(setMsg, 'Google ist verknüpft. Ab jetzt kannst du dich mit „Mit Google anmelden“ einloggen – deine Daten bleiben erhalten.');
 
-  if (!isLegacyUser(user)) return null;
-  const hasGoogle = user.providerData.some((p) => p.providerId === 'google.com');
-
-  const run = async (fn, okText) => {
-    setBusy(true); setMsg({ type: '', text: '' });
-    try {
-      await fn();
-      setMsg({ type: 'ok', text: okText });
-      rerender((x) => x + 1);
-    } catch (e) {
-      if (!IGNORED.includes(e.code)) {
-        console.error('Konto sichern fehlgeschlagen:', e.code, e.message);
-        setMsg({ type: 'err', text: authErrorMessage(e.code) });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const connectGoogle = () => run(
-    () => linkGoogle(user),
-    'Google ist verknüpft. Ab jetzt kannst du dich mit „Mit Google anmelden“ einloggen – deine Daten bleiben erhalten.'
-  );
-
-  const changeMail = () => {
-    const mail = newMail.trim();
-    if (!EMAIL_RE.test(mail) || mail.toLowerCase().endsWith(LEGACY_DOMAIN)) { setMsg({ type: 'err', text: 'Bitte eine echte E-Mail-Adresse eingeben.' }); return; }
-    if (!oldPw) { setMsg({ type: 'err', text: 'Bitte dein aktuelles Passwort eingeben.' }); return; }
-    run(async () => {
-      await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, oldPw));
-      await verifyBeforeUpdateEmail(user, mail);
-      setOldPw('');
-    }, `Wir haben einen Bestätigungslink an ${mail} geschickt. Nach dem Klick darauf ist das deine neue Anmelde-Adresse (gleiches Passwort wie bisher). Danach bitte neu anmelden.`);
-  };
-
-  return (
-    <div className="bg-amber-500/10 border border-amber-500/40 rounded-2xl p-5 space-y-3 shadow-lg">
-      <h3 className="font-bold text-amber-300 text-sm">🔐 Konto sichern</h3>
-      <p className="text-xs text-slate-300">
-        Dein Konto läuft noch mit dem alten Benutzernamen-Login. Dafür gibt es keine echte E-Mail-Adresse – „Passwort vergessen“ funktioniert deshalb nicht.
-        Sichere es mit einer der beiden Möglichkeiten. Deine Karten, Binder und Verkäufe bleiben dabei unverändert.
-      </p>
-
-      {!hasGoogle && (
-        <button onClick={connectGoogle} disabled={busy} className="w-full bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-900 font-bold text-sm py-2.5 rounded-xl">
-          Google-Konto verknüpfen
-        </button>
-      )}
-      {hasGoogle && <p className="text-xs text-emerald-400">✓ Google ist verknüpft.</p>}
-
-      <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
-        <p className="text-xs font-bold text-slate-200">Oder: echte E-Mail-Adresse hinterlegen</p>
-        <input type="email" value={newMail} onChange={(e) => setNewMail(e.target.value)} placeholder="Neue E-Mail-Adresse" autoComplete="email" className={smallInputCls} />
-        <input type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} placeholder="Aktuelles Passwort (zur Sicherheit)" autoComplete="current-password" className={smallInputCls} />
-        <button onClick={changeMail} disabled={busy} className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-black text-sm py-2.5 rounded-lg">
-          {busy ? 'Bitte warten …' : 'Bestätigungslink senden'}
-        </button>
-      </div>
-
-      {msg.text && <p className={`text-xs ${msg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400'}`}>{msg.text}</p>}
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------
 // Konto-Karte im Profil (für Konten mit echter E-Mail-Adresse)
@@ -413,7 +320,7 @@ export function AccountPanel() {
   const [, rerender] = useState(0);
   useRedirectMessage(setMsg, 'Google ist verknüpft.');
 
-  if (!user || isLegacyUser(user)) return null;
+  if (!user) return null;
   const hasGoogle = user.providerData.some((p) => p.providerId === 'google.com');
   const hasPassword = user.providerData.some((p) => p.providerId === 'password');
 

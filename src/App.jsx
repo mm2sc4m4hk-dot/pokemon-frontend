@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { BRAND_NAME, Disclaimer } from './brand';
-import { LoginScreen, LegacyUpgradeBanner, AccountPanel } from './AuthScreens';
+import { LoginScreen, AccountPanel } from './AuthScreens';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
 import { CardHistoryChart, WeeklyMovers, PushToggle, OutlierBadge } from './Insights';
@@ -1547,7 +1547,6 @@ useEffect(() => {
       <main className="max-w-4xl mx-auto p-4">
         {activeTab === 'profile' && (
           <div className="space-y-6 fade-in">
-            <LegacyUpgradeBanner />
             <NewSetsBanner api={API_URL} watchIds={watchlistIds} uid={auth.currentUser?.uid} Img={CardImage} />
             {dealCount > 0 && (
               <button onClick={() => setActiveTab('watchlist')} className="w-full text-left bg-emerald-500/10 border border-emerald-500/40 rounded-xl p-3 text-sm text-emerald-300 hover:bg-emerald-500/20 transition-colors">
