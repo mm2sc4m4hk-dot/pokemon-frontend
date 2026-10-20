@@ -228,7 +228,7 @@ export function DatenschutzPage() {
       <Section title="5. Löschung des Kontos, Speicherdauer und Backups">
         <P>
           Sie können Ihr Konto jederzeit im Profil unter „Konto löschen“ entfernen. Zur Sicherheit
-          verlangen wir eine erneute Anmeldung und die Bestätigung durch Eintippen von „LÖSCHEN“.
+          verlangen wir die Bestätigung durch Eintippen von „LÖSCHEN“.
           Danach löscht der Server unverzüglich und unwiderruflich:
         </P>
         <P>
