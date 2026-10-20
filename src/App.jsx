@@ -1676,6 +1676,9 @@ useEffect(() => {
               onEdit={openEditCard}
             />
 
+            <AccountPanel />
+
+            <SharePanel collection={collection} watchlist={watchlist} ready={collectionReady} api={API_URL} />
             <BackupPanel
               collection={collection}
               watchlist={watchlist}
