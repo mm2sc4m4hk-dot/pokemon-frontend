@@ -1,10 +1,11 @@
 // Echtes Login für TCG Vault (Firebase Authentication):
 //   LoginScreen         – Anmelden, Registrieren, Passwort vergessen, Google
 //   AccountPanel        – Konto-Karte im Profil (E-Mail, Bestätigung, Google verknüpfen, Passwort ändern)
+//   DeleteAccountPanel  – Konto löschen (Art. 17 DSGVO)
 //
-// Importiert nichts aus App.jsx (kein Zirkellbezug). Die Daten bleiben unter users/{uid}/... in Firestore,
+// Importiert nichts aus App.jsx (kein Zirkelbezug). Die Daten bleiben unter users/{uid}/... in Firestore,
 // deshalb ändert sich an den Firestore-Regeln nichts.
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -23,7 +24,7 @@ import {
   signOut
 } from 'firebase/auth';
 import { auth } from './firebase';
-import { BRAND_NAME, Disclaimer, Footer } from './brand';
+import { BRAND_NAME, Footer } from './brand';
 import { API_URL, QUOTA_CHANGED_EVENT } from './config';
 import { navigate } from './router';
 import { markRedirectPending, resolveRedirectOutcome } from './authRedirect';
@@ -69,6 +70,9 @@ const POPUP_PROBLEMS = ['auth/popup-blocked', 'auth/operation-not-supported-in-t
 // zentral in ./authRedirect.js – dort wird getRedirectResult genau einmal
 // aufgerufen und das Ergebnis zwischen Login und Verknüpfung geteilt.
 
+// Merkt sich über einen Redirect hinweg, dass der Lösch-Dialog offen war.
+const DELETE_PENDING_KEY = 'tcg-vault:delete-pending';
+
 const isStandalone = () =>
   (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
   (typeof navigator !== 'undefined' && navigator.standalone === true);
@@ -94,11 +98,11 @@ export function LoginScreen({ onDone }) {
   // Login stillschweigend verloren gegangen -> sichtbarer Hinweis statt Stille.
   useEffect(() => {
     let active = true;
-    resolveRedirectOutcome().then(({ ok, result, error, cameBack }) => {
+    resolveRedirectOutcome().then(({ ok, result, error: err, cameBack }) => {
       if (!active) return;
       if (!ok) {
-        console.error('[Auth] redirect error:', error?.code, error?.message);
-        if (!IGNORED.includes(error?.code)) setError(authErrorMessage(error?.code));
+        console.error('[Auth] redirect error:', err?.code, err?.message);
+        if (!IGNORED.includes(err?.code)) setError(authErrorMessage(err?.code));
         return;
       }
       console.log('[Auth] redirect result:', result);
@@ -123,7 +127,6 @@ export function LoginScreen({ onDone }) {
   const register = async () => {
     const mail = email.trim();
     if (!EMAIL_RE.test(mail)) { setError('Bitte eine gültige E-Mail-Adresse eingeben.'); return; }
-    if (!EMAIL_RE.test(mail)) { setError('Bitte die E-Mail-Adresse deines Kontos eingeben.'); return; }
     if (password.length < MIN_PASSWORD) { setError(`Das Passwort braucht mindestens ${MIN_PASSWORD} Zeichen.`); return; }
     if (password !== confirm) { setError('Die Passwörter stimmen nicht überein.'); return; }
     const cred = await createUserWithEmailAndPassword(auth, mail, password);
@@ -134,7 +137,6 @@ export function LoginScreen({ onDone }) {
 
   const reset = async () => {
     const mail = email.trim();
-    if (!EMAIL_RE.test(mail)) { setError('Bitte die E-Mail-Adresse deines Kontos eingeben.'); return; }
     if (!EMAIL_RE.test(mail)) { setError('Bitte die E-Mail-Adresse deines Kontos eingeben.'); return; }
     try {
       await sendPasswordResetEmail(auth, mail);
@@ -258,7 +260,6 @@ export function LoginScreen({ onDone }) {
               className={inputCls}
               placeholder="name@beispiel.de"
             />
-            
           </div>
           {!isReset && (
             <div>
@@ -344,8 +345,6 @@ function useRedirectMessage(setMsg, okText) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
-
-
 
 // ---------------------------------------------------------------------
 // Konto-Karte im Profil (für Konten mit echter E-Mail-Adresse)
@@ -439,7 +438,7 @@ function ScanQuota() {
           resetAt: data.resetAt || '',
           error: ''
         });
-      } catch (e) {
+      } catch {
         if (active) setState((s) => ({ ...s, loading: false, error: 'Kontingent konnte nicht geladen werden.' }));
       }
     };
@@ -481,25 +480,33 @@ function ScanQuota() {
   );
 }
 
-
 // ---------------------------------------------------------------------
 // Konto löschen (Art. 17 DSGVO)
 // ---------------------------------------------------------------------
 // Ablauf:
 //   1. Bestätigung durch Eintippen von „LÖSCHEN“ (verhindert Fehlklicks)
-//   2. Re-Authentifizierung (Passwort bzw. Google-Popup), damit niemand mit
-//      einer offenen Sitzung das Konto löscht
+//   2. Re-Authentifizierung (Passwort bzw. Google). Google zuerst per Popup;
+//      blockiert der Browser das Popup (oder läuft die App installiert),
+//      geht es per Redirect weiter. Nach der Rückkehr ist der Dialog wieder
+//      offen, man tippt „LÖSCHEN“ erneut und löscht – jetzt mit frischer Anmeldung.
 //   3. ID-Token an POST /api/delete-account: dort löscht der Server alles
 //      (Firestore inkl. Untercollectionen, Storage, Kontingent, zuletzt den
 //      Auth-User). Der Client kann Subcollections nicht rekursiv löschen.
 const CONFIRM_WORD = 'LÖSCHEN';
 
 function DeleteAccount({ user }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => {
+    try { return sessionStorage.getItem(DELETE_PENDING_KEY) === '1'; } catch { return false; }
+  });
   const [confirm, setConfirm] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+
+  // Marker nach dem Redirect wieder entfernen (der Zustand oben ist schon gelesen)
+  useEffect(() => {
+    try { sessionStorage.removeItem(DELETE_PENDING_KEY); } catch { /* egal */ }
+  }, []);
 
   const hasPassword = user.providerData.some((p) => p.providerId === 'password');
 
@@ -509,25 +516,30 @@ function DeleteAccount({ user }) {
   };
 
   // Frische Anmeldung: der Server prüft auth_time bzw. den letzten Sign-in.
+  // Rückgabe: 'ok' (fertig) oder 'redirect' (Seite navigiert gerade weg).
   const reauth = async () => {
     if (hasPassword) {
       if (!password) throw new Error('Bitte dein Passwort eingeben.');
       await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, password));
-      return;
+      return 'ok';
     }
-    if (isStandalone()) {
-      throw new Error('Bitte melde dich ab und neu an – in der installierten App ist kein Anmeldefenster möglich.');
-    }
+
+    const viaRedirect = async () => {
+      markRedirectPending();
+      try { sessionStorage.setItem(DELETE_PENDING_KEY, '1'); } catch { /* egal */ }
+      await reauthenticateWithRedirect(user, googleProvider());
+      return 'redirect';
+    };
+
+    if (isStandalone()) return viaRedirect();
     try {
       await reauthenticateWithPopup(user, googleProvider());
+      return 'ok';
     } catch (e) {
-      if (POPUP_PROBLEMS.includes(e.code)) {
-        throw new Error('Das Anmeldefenster wurde blockiert. Bitte Pop-ups erlauben oder dich ab- und neu anmelden.');
-      }
+      if (POPUP_PROBLEMS.includes(e.code)) return viaRedirect();
       throw e;
     }
   };
-
 
   const remove = async () => {
     setError('');
@@ -537,7 +549,9 @@ function DeleteAccount({ user }) {
     }
     setBusy(true);
     try {
-      await reauth();
+      const state = await reauth();
+      if (state === 'redirect') return; // Seite navigiert weg; nach der Rückkehr erneut „Endgültig löschen“
+
       const token = await user.getIdToken(true);
       const res = await fetch(`${API_URL}/api/delete-account`, {
         method: 'POST',
@@ -557,9 +571,10 @@ function DeleteAccount({ user }) {
 
       // Konto ist serverseitig gelöscht: Sitzung beenden und zur Startseite.
       await signOut(auth).catch(() => {});
-      await navigate('/');
+      navigate('/');
       window.scrollTo(0, 0);
     } catch (e) {
+      if (IGNORED.includes(e.code)) return; // Popup selbst geschlossen
       console.error('Konto-Löschung fehlgeschlagen:', e.code, e.message);
       if (e.code && String(e.code).startsWith('auth/')) setError(authErrorMessage(e.code));
       else setError(e.message || 'Löschen fehlgeschlagen.');
@@ -603,7 +618,10 @@ function DeleteAccount({ user }) {
               />
             </div>
           ) : (
-            <p className="text-[11px] text-slate-400">Zur Bestätigung öffnet sich das Google-Anmeldefenster.</p>
+            <p className="text-[11px] text-slate-400">
+              Zur Bestätigung öffnet sich das Google-Anmeldefenster. Wird es blockiert, wirst du kurz zu Google
+              weitergeleitet und kehrst danach hierher zurück – dann einfach noch einmal bestätigen.
+            </p>
           )}
 
           <div>
