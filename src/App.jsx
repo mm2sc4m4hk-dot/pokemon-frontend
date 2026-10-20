@@ -13,7 +13,7 @@ import {
 import { auth, db } from './firebase';
 import { BRAND_NAME, Footer } from './brand';
 import { KOFI_URL } from './config';
-import { LoginScreen, AccountPanel } from './AuthScreens';
+import { LoginScreen, AccountPanel, DeleteAccountPanel } from './AuthScreens';
 import { resolveRedirectOutcome } from './authRedirect';
 import { ArtistView, PokedexView, BinderView, HBars, SORT_OPTIONS, sortCollection } from './Extras';
 import { fetchPrices } from './priceData';
@@ -1689,6 +1689,7 @@ useEffect(() => {
               isAutoPrice={isAutoPrice}
             />
             <SupportCard />
+            <DeleteAccountPanel />
           </div>
         )}
 

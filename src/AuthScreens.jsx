@@ -407,8 +407,6 @@ export function AccountPanel() {
       {msg.text && <p className={`text-xs ${msg.type === 'ok' ? 'text-emerald-400' : 'text-rose-400'}`}>{msg.text}</p>}
 
       <ScanQuota />
-
-      <DeleteAccount user={user} />
     </div>
   );
 }
@@ -648,3 +646,13 @@ function DeleteAccount({ user }) {
   );
 }
 
+// Eigene Karte ganz unten im Profil (nach allen anderen Bereichen)
+export function DeleteAccountPanel() {
+  const user = auth.currentUser;
+  if (!user) return null;
+  return (
+    <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl shadow-xl">
+      <DeleteAccount user={user} />
+    </div>
+  );
+}
