@@ -16,6 +16,7 @@ import {
 import { auth, db } from './firebase';
 import { toCsv, parseCsv, downloadText } from './csvTools';
 import { BRAND_NAME, Disclaimer } from './brand';
+import { BRAND_NAME, Footer } from './brand';
 
 const eur = (n) => `${(Number(n) || 0).toFixed(2).replace('.', ',')} €`;
 const plain = (name) => String(name || '').replace(/\s*\[.*\]\s*$/, '');
